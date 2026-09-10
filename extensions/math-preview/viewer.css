@@ -328,7 +328,7 @@ body.live-resizing { user-select: none; cursor: row-resize; }
 #live-input {
 	flex: 1;
 	height: var(--live-h, 42px);
-	min-height: 38px;
+	min-height: var(--live-min-h, 42px); /* 至少完整显示一行（由脚本按字体精确计算） */
 	max-height: 60vh;
 	resize: none;
 	padding: 9px 12px;

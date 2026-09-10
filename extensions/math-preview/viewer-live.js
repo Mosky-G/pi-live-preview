@@ -184,12 +184,24 @@
 	}
 	if (sendBtn) sendBtn.addEventListener("click", send);
 
+	/** 一行文本完整可见所需的最小高度（行高 + 上下内边距 + 边框） */
+	function oneLineHeight(el) {
+		var cs = getComputedStyle(el);
+		var line = parseFloat(cs.lineHeight);
+		if (!line || isNaN(line)) line = (parseFloat(cs.fontSize) || 13.5) * 1.5;
+		var pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+		var bd = (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
+		return Math.ceil(line + pad + bd);
+	}
+
 	/** 输入框上缘拖拽：调整高度，结果记在 localStorage（和侧栏宽度同一套习惯） */
 	function setupLiveResizer() {
 		var resizer = document.getElementById("live-resizer");
 		if (!resizer || !inputEl) return;
 		var KEY = "pi-preview-live-height";
-		var MIN_H = 38;
+		// 最短 = 恰好完整显示一行（带内边距与边框），避免拖到最矮时出现滚动条
+		var MIN_H = oneLineHeight(inputEl);
+		document.documentElement.style.setProperty("--live-min-h", MIN_H + "px");
 		var dragging = false;
 		var startY = 0;
 		var startH = 0;
