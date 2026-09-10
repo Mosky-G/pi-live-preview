@@ -1,0 +1,27 @@
+{
+	"name": "pi-live-preview",
+	"version": "0.1.0",
+	"description": "pi 扩展：把会话渲染成带公式排版（KaTeX）的 HTML，支持实时镜像（SSE）与静态快照",
+	"keywords": [
+		"pi-package",
+		"pi",
+		"katex",
+		"markdown",
+		"preview",
+		"live-preview",
+		"math"
+	],
+	"license": "MIT",
+	"type": "module",
+	"pi": {
+		"extensions": [
+			"./extensions"
+		]
+	},
+	"dependencies": {
+		"katex": "^0.18.7"
+	},
+	"engines": {
+		"node": ">=20"
+	}
+}
