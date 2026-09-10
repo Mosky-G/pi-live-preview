@@ -141,6 +141,16 @@
 		}
 	}
 
+	/**
+	 * 换行后光标会移到下一行，但浏览器不会自动把可视区跟过去（要再敲一个字才跳）。
+	 * 光标在末尾时直接把输入框滚到底。
+	 */
+	function keepCaretVisible(el) {
+		if (!el) return;
+		var atEnd = el.selectionStart === el.value.length && el.selectionEnd === el.value.length;
+		if (atEnd) el.scrollTop = el.scrollHeight;
+	}
+
 	if (inputEl) {
 		inputEl.addEventListener("keydown", function (e) {
 			if (e.key === "Escape") {
@@ -151,14 +161,25 @@
 				return;
 			}
 			if (e.key !== "Enter") return;
-			if (e.shiftKey) return; // 交给浏览器默认行为（换行）
+			if (e.shiftKey) {
+				// 交给浏览器默认行为（换行），下一帧再把可视区滚到光标旁
+				setTimeout(function () {
+					keepCaretVisible(inputEl);
+				}, 0);
+				return;
+			}
 			if (e.ctrlKey || e.metaKey || e.altKey) {
 				e.preventDefault();
 				insertNewline(inputEl);
+				keepCaretVisible(inputEl);
 				return;
 			}
 			e.preventDefault();
 			send();
+		});
+		// 普通输入 / 粘贴后也顺手补一下（浏览器多数情况会自动滚，这里只是兜底）
+		inputEl.addEventListener("input", function () {
+			keepCaretVisible(inputEl);
 		});
 	}
 	if (sendBtn) sendBtn.addEventListener("click", send);
