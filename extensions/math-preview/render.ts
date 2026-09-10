@@ -155,7 +155,8 @@ const COMMON_SCRIPTS = `<script src="assets/marked.min.js"></script>
 export async function buildHtml(items: any[], meta: PreviewMeta): Promise<string> {
 	const { viewerJs, viewerCss } = await readViewerAssets();
 	const payload = JSON.stringify({ meta, items }).replace(/</g, "\\u003c");
-	const title = `会话预览${meta.sessionName ? " · " + meta.sessionName : ""}`;
+	// 标签页名：有会话名用会话名，否则叫「新的对话」；加后缀区分静态快照
+	const title = `${meta.sessionName || "新的对话"} · 快照`;
 	return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -175,7 +176,7 @@ ${viewerCss}
 		<nav class="side-nav" id="toc"></nav>
 		<div class="side-foot dim" id="t-meta"></div>
 	</aside>
-	<div id="side-resizer" title="拖动调整目录宽度（拖到最窄自动收起）"></div>
+	<div id="side-resizer"></div>
 	<section id="pane">
 		<main id="content"></main>
 	</section>
@@ -194,7 +195,7 @@ ${safeScript(viewerJs)}
 export async function buildLiveHtml(meta: Partial<PreviewMeta>): Promise<string> {
 	const { viewerJs, viewerCss } = await readViewerAssets();
 	const liveJs = await readFile(join(EXT_DIR, "viewer-live.js"), "utf8");
-	const title = `实时预览${meta.sessionName ? " · " + meta.sessionName : ""}`;
+	const title = meta.sessionName || "新的对话";
 	return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -214,11 +215,11 @@ ${viewerCss}
 		<nav class="side-nav" id="toc"></nav>
 		<div class="side-foot dim" id="t-meta"></div>
 	</aside>
-	<div id="side-resizer" title="拖动调整目录宽度（拖到最窄自动收起）"></div>
+	<div id="side-resizer"></div>
 	<section id="pane">
 		<main id="content"></main>
 		<div id="live-bar" class="locked">
-			<div id="live-resizer" title="拖动调整输入框高度"></div>
+			<div id="live-resizer"></div>
 			<textarea id="live-input" rows="1" disabled placeholder="输入已在终端锁定：在 pi 里执行 /live input 解锁"></textarea>
 			<button id="live-send" type="button" disabled>发送</button>
 			<span id="live-status" class="live-status">连接中…</span>
