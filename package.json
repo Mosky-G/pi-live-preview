@@ -15,7 +15,7 @@
 	"type": "module",
 	"pi": {
 		"extensions": [
-			"./extensions"
+			"./extensions/math-preview/index.ts"
 		]
 	},
 	"dependencies": {
