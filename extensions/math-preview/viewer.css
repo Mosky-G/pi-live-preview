@@ -28,22 +28,36 @@
 }
 * { box-sizing: border-box; }
 
-/* ---------- 滚动条：统一主题，去掉 Windows 原生的上下箭头 ---------- */
-* {
-	scrollbar-width: thin; /* Firefox */
-	scrollbar-color: #3a4450 transparent;
-}
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb {
+/* ---------- 滚动条：主题化（圆角、配色、无箭头）----------
+   ⚠ 不能给 Chromium 设置 scrollbar-width/scrollbar-color：一旦标准属性生效，
+   Chromium 会禁用 ::-webkit-scrollbar 自定义并退回系统默认（白色方块条）。
+   所以标准属性只给不支持 webkit 伪元素的浏览器（Firefox）。 */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
 	background: #333d49;
 	background-clip: content-box;
 	border: 2px solid transparent;
 	border-radius: 6px;
 }
-::-webkit-scrollbar-thumb:hover { background: #46525f; background-clip: content-box; }
-::-webkit-scrollbar-corner { background: transparent; }
-::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+*::-webkit-scrollbar-thumb:hover { background: #4a5866; background-clip: content-box; }
+*::-webkit-scrollbar-thumb:active { background: #5a6a7a; background-clip: content-box; }
+*::-webkit-scrollbar-corner { background: transparent; }
+*::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+/* 侧栏 / 输入框 / 代码块更秀气 */
+#sidebar::-webkit-scrollbar,
+#live-input::-webkit-scrollbar,
+pre::-webkit-scrollbar { width: 8px; height: 8px; }
+#sidebar::-webkit-scrollbar-thumb,
+#live-input::-webkit-scrollbar-thumb,
+pre::-webkit-scrollbar-thumb { border-width: 1px; }
+
+@supports not selector(::-webkit-scrollbar) {
+	* {
+		scrollbar-width: thin;
+		scrollbar-color: #333d49 transparent;
+	}
+}
 html, body {
 	margin: 0;
 	background: var(--bg);
