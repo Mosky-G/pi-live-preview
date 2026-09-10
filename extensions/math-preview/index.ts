@@ -248,6 +248,21 @@ export default function mathPreview(pi: ExtensionAPI) {
 		live?.broadcast({ type: "status", busy: false });
 	});
 
+	/** 会话改名（/name）时把最新 meta 推给页面，标签页标题跟着变 */
+	pi.on("session_info_changed", (_event, ctx) => {
+		if (!live) return;
+		live.broadcast({
+			type: "meta",
+			meta: {
+				sessionId: sessionShortId(ctx),
+				sessionName: sessionNameOf(ctx),
+				cwd: ctx.cwd,
+				generatedAt: new Date().toLocaleString(),
+				totalItems: liveItems.length,
+			},
+		});
+	});
+
 	pi.on("session_shutdown", async () => {
 		if (!live) return;
 		try {
@@ -267,7 +282,12 @@ export default function mathPreview(pi: ExtensionAPI) {
 		openIndex = null;
 		const handle = await startLiveServer({
 			assetsDir: ASSETS_DIR,
-			pageHtml: () => buildLiveHtml({ sessionId: sessionShortId(ctx), cwd: ctx.cwd }),
+			pageHtml: () =>
+				buildLiveHtml({
+					sessionId: sessionShortId(ctx),
+					sessionName: sessionNameOf(ctx),
+					cwd: ctx.cwd,
+				}),
 			getSnapshot: () => ({
 				items: liveItems,
 				meta: {

@@ -50,6 +50,11 @@
 				P.setItems(msg.items || []);
 				P.renderAll();
 				break;
+			case "meta":
+				// 会话改名等元信息变化（标签页名、侧栏标题跟着走）
+				P.setMeta(msg.meta || {});
+				P.updateHeader();
+				break;
 			case "append":
 				P.appendItem(msg.item);
 				break;

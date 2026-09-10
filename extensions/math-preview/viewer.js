@@ -30,6 +30,8 @@
 	/** 由 setupSidebarToggle 赋值，供拖拽自动收起复用 */
 	var setCollapsed = function () {};
 	var tocObserver = null;
+	/** 静态页标题带后缀，与实时页区分 */
+	var TITLE_SUFFIX = LIVE ? "" : " · 快照";
 
 	function esc(s) {
 		return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
@@ -309,6 +311,10 @@
 		var m = document.getElementById("t-meta");
 		// 只在会话有名字时显示名字，否则留空（不再显示会话 id 前 8 位）
 		if (s) s.textContent = meta.sessionName ? " " + meta.sessionName : "";
+		// meta 尚未到达（实时页刚加载）时不要覆盖 HTML 里已有的标题
+		if (meta.sessionName !== undefined || meta.sessionId || meta.totalItems !== undefined) {
+			document.title = (meta.sessionName || "新的对话") + TITLE_SUFFIX;
+		}
 		if (m) {
 			m.textContent =
 				(meta.totalItems && meta.totalItems !== items.length ? items.length + "/" + meta.totalItems + " 项" : items.length + " 项") +
