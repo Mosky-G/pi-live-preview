@@ -74,6 +74,8 @@ cd ~/pi-live-preview && npm install
 
 两个命令都支持参数补全。
 
+实时页面底部的输入条：`Enter` 发送，`Shift` / `Ctrl` / `Alt` + `Enter` 换行，`Esc` 清空；上缘可拖动调整高度（38px 到 60vh，会自动记住）。
+
 ### 环境变量
 
 | 变量 | 作用 |

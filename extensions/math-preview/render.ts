@@ -218,6 +218,7 @@ ${viewerCss}
 	<section id="pane">
 		<main id="content"></main>
 		<div id="live-bar" class="locked">
+			<div id="live-resizer" title="拖动调整输入框高度"></div>
 			<textarea id="live-input" rows="1" disabled placeholder="输入已在终端锁定：在 pi 里执行 /live input 解锁"></textarea>
 			<button id="live-send" type="button" disabled>发送</button>
 			<span id="live-status" class="live-status">连接中…</span>

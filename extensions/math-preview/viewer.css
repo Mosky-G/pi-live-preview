@@ -27,6 +27,23 @@
 	--side-line: #2b333d;
 }
 * { box-sizing: border-box; }
+
+/* ---------- 滚动条：统一主题，去掉 Windows 原生的上下箭头 ---------- */
+* {
+	scrollbar-width: thin; /* Firefox */
+	scrollbar-color: #3a4450 transparent;
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+	background: #333d49;
+	background-clip: content-box;
+	border: 2px solid transparent;
+	border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover { background: #46525f; background-clip: content-box; }
+::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
 html, body {
 	margin: 0;
 	background: var(--bg);
@@ -268,11 +285,24 @@ pre code .hljs-deletion { color: #cc6666; }
 	backdrop-filter: blur(6px);
 	border-top: 1px solid var(--line);
 }
+/* 输入框上缘拖拽条：像侧栏一样可上下拖动调整高度 */
+#live-resizer {
+	position: absolute;
+	top: -3px;
+	left: 0;
+	right: 0;
+	height: 6px;
+	cursor: row-resize;
+	background: transparent;
+}
+#live-resizer:hover, body.live-resizing #live-resizer { background: var(--accent-user); }
+body.live-resizing { user-select: none; cursor: row-resize; }
 #live-input {
 	flex: 1;
+	height: var(--live-h, 42px);
 	min-height: 38px;
-	max-height: 180px;
-	resize: vertical;
+	max-height: 60vh;
+	resize: none;
 	padding: 9px 12px;
 	background: var(--card);
 	color: var(--fg);
@@ -282,6 +312,8 @@ pre code .hljs-deletion { color: #cc6666; }
 	font-size: 13.5px;
 	line-height: 1.5;
 }
+#live-input::-webkit-scrollbar { width: 8px; }
+#live-input::-webkit-scrollbar-thumb { border-width: 1px; }
 #live-input:focus { outline: none; border-color: var(--accent-user); }
 #live-input:disabled { opacity: 0.55; cursor: not-allowed; }
 #live-send {
