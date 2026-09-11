@@ -387,14 +387,15 @@
 			if (meta.cwd) lines.push(meta.cwd);
 			m.textContent = lines.join("\n");
 		}
-		// 当前 goal（由 /goal 写入的 session entry 提供）
-		var g = document.getElementById("t-goal");
+		// 当前 goal：底部固定条（始终可见）
+		var g = document.getElementById("goal-bar");
 		if (g) {
 			var goal = meta.goal;
 			if (goal && goal.text) {
 				g.hidden = false;
 				var tagText = goal.iteration > 1 ? "目标 · 第 " + goal.iteration + " 轮" : "当前目标";
-				g.innerHTML = '<span class="goal-tag">' + esc(tagText) + "</span>" + esc(goal.text);
+				g.innerHTML =
+					'<span class="goal-tag">' + esc(tagText) + '</span><span class="goal-text">' + esc(goal.text) + "</span>";
 				g.title = goal.text;
 			} else {
 				g.hidden = true;

@@ -228,11 +228,11 @@ interface LiveState {
 	indexByMessage: WeakMap<object, number>;
 	pendingUpdate: { index: number; item: any } | null;
 	flushTimer: ReturnType<typeof setTimeout> | null;
-	/** 最近一次会话上下文（页面刷新时生成 HTML / 快照用） */
-	getContext: (() => { sessionId: string; sessionName: string; cwd: string }) | null;
+	/** 最近一次看到的会话上下文（事件/命令里持续更新） */
+	ctx: any | null;
 	/**
-	 * 服务回调的实现，由最近一次保证过的扩展实例写入。
-	 * 这样 /reload 后即使服务不重建，也会用上新代码（否则 meta 会永远缺字段）。
+	 * 服务回调的实现，每个模块实例加载时都会重新安装（见 installImplementations）。
+	 * 这样 /reload 后新实例立刻接管，不再用旧代码生成页面/快照。
 	 */
 	pageHtmlImpl: (() => string | Promise<string>) | null;
 	snapshotImpl: (() => { items: unknown[]; meta: Record<string, unknown> }) | null;
@@ -251,7 +251,7 @@ function liveState(): LiveState {
 			indexByMessage: new WeakMap(),
 			pendingUpdate: null,
 			flushTimer: null,
-			getContext: null,
+			ctx: null,
 			pageHtmlImpl: null,
 			snapshotImpl: null,
 		} satisfies LiveState;
@@ -260,23 +260,25 @@ function liveState(): LiveState {
 }
 
 /**
- * 注册“当前实例”的实现：页面 HTML 生成与快照。
- * 会话切换 / recoil（reload）后扩展实例会被重建，旧闭包不该继续为新代码服务。
- * 注意：快照读的是全局 S.items，而分支数据（usage/goal）现场从 ctx 取，保证信息最新。
+ * 用全局 ctx 安装「当前模块版本」的页面 HTML / 快照实现。
+ * 必须在扩展工厂加载时调用：/reload 后新实例立即接管服务回调，
+ * 否则服务会一直用启动时那个旧闭包（meta 里永远缺新加的字段）。
  */
-function refreshImplementations(ctx: any): void {
+function installImplementations(): void {
 	const S = liveState();
-	S.getContext = () => ({ sessionId: sessionShortId(ctx), sessionName: sessionNameOf(ctx), cwd: ctx?.cwd ?? "" });
 	S.pageHtmlImpl = () => {
-		const c = S.getContext?.() ?? { sessionId: "unknown", sessionName: "", cwd: "" };
-		return buildLiveHtml({ sessionId: c.sessionId, sessionName: c.sessionName, cwd: c.cwd });
+		const ctx = S.ctx;
+		return buildLiveHtml({ sessionId: sessionShortId(ctx), sessionName: sessionNameOf(ctx), cwd: ctx?.cwd ?? "" });
 	};
 	S.snapshotImpl = () => {
+		const ctx = S.ctx;
 		const entries = ctx?.sessionManager?.getBranch?.() ?? [];
 		return {
 			items: S.items,
 			meta: {
-				...(S.getContext?.() ?? { sessionId: "unknown", sessionName: "", cwd: "" }),
+				sessionId: sessionShortId(ctx),
+				sessionName: sessionNameOf(ctx),
+				cwd: ctx?.cwd ?? "",
 				usage: usageInfo(ctx, entries),
 				goal: goalInfo(entries),
 				generatedAt: new Date().toLocaleString(),
@@ -286,11 +288,18 @@ function refreshImplementations(ctx: any): void {
 	};
 }
 
-/** 用给定 ctx 重建页面内容并让前端整体重载（会话/分支变化时用） */
+/** 更新全局 ctx（每个事件 / 命令处理器开头调一次，开销极小） */
+function syncCtx(ctx: any): void {
+	if (ctx) liveState().ctx = ctx;
+}
+
+/**
+ * 用给定 ctx 重建页面内容并让前端整体重载（会话/分支变化时用）
+ */
 function reloadForContext(ctx: any, reason: string): void {
 	const S = liveState();
 	if (!S.handle) return;
-	refreshImplementations(ctx);
+	syncCtx(ctx);
 	const entries = ctx?.sessionManager?.getBranch?.() ?? [];
 	S.items = buildItems(entries);
 	S.openIndex = null;
@@ -301,7 +310,9 @@ function reloadForContext(ctx: any, reason: string): void {
 		reason,
 		items: S.items,
 		meta: {
-			...(S.getContext?.() ?? { sessionId: "unknown", sessionName: "", cwd: "" }),
+			sessionId: sessionShortId(ctx),
+			sessionName: sessionNameOf(ctx),
+			cwd: ctx?.cwd ?? "",
 			usage: usageInfo(ctx, entries),
 			goal: goalInfo(entries),
 			generatedAt: new Date().toLocaleString(),
@@ -312,16 +323,20 @@ function reloadForContext(ctx: any, reason: string): void {
 
 export default function mathPreview(pi: ExtensionAPI) {
 	const S = liveState();
+	// 模块实例一加载就安装实现：/reload 后新代码立即接管服务回调
+	installImplementations();
 
-	/** 把最新 meta（含上下文用量与花费）推给页面 */
+	/** 把最新 meta（含上下文用量、花费、goal）推给页面 */
 	function broadcastMeta(ctx: any): void {
+		syncCtx(ctx);
 		if (!S.handle) return;
 		const entries = ctx?.sessionManager?.getBranch?.() ?? [];
-		S.getContext = () => ({ sessionId: sessionShortId(ctx), sessionName: sessionNameOf(ctx), cwd: ctx?.cwd ?? "" });
 		S.handle.broadcast({
 			type: "meta",
 			meta: {
-				...S.getContext(),
+				sessionId: sessionShortId(ctx),
+				sessionName: sessionNameOf(ctx),
+				cwd: ctx?.cwd ?? "",
 				usage: usageInfo(ctx, entries),
 				goal: goalInfo(entries),
 				generatedAt: new Date().toLocaleString(),
@@ -356,7 +371,8 @@ export default function mathPreview(pi: ExtensionAPI) {
 		return S.openIndex ?? undefined;
 	}
 
-	pi.on("message_start", (event) => {
+	pi.on("message_start", (event, ctx) => {
+		syncCtx(ctx);
 		if (!S.handle) return;
 		const message: any = (event as any).message;
 		const item = messageToItem(message);
@@ -368,7 +384,8 @@ export default function mathPreview(pi: ExtensionAPI) {
 		S.handle.broadcast({ type: "append", item });
 	});
 
-	pi.on("message_update", (event) => {
+	pi.on("message_update", (event, ctx) => {
+		syncCtx(ctx);
 		if (!S.handle) return;
 		const message: any = (event as any).message;
 		const item = messageToItem(message);
@@ -406,10 +423,12 @@ export default function mathPreview(pi: ExtensionAPI) {
 		broadcastMeta(ctx);
 	});
 
-	pi.on("agent_start", () => {
+	pi.on("agent_start", (_event, ctx) => {
+		syncCtx(ctx);
 		S.handle?.broadcast({ type: "status", busy: true });
 	});
-	pi.on("agent_end", () => {
+	pi.on("agent_end", (_event, ctx) => {
+		syncCtx(ctx);
 		S.handle?.broadcast({ type: "status", busy: false });
 	});
 	pi.on("agent_settled", (_event, ctx) => {
@@ -453,12 +472,11 @@ export default function mathPreview(pi: ExtensionAPI) {
 		S.handle = null;
 		S.inputEnabled = false;
 		S.items = [];
-		S.getContext = null;
+		S.ctx = null;
 	});
 
 	async function ensureLive(ctx: ExtensionCommandContext): Promise<LiveServerHandle> {
-		// 无论服务是否已存在都刷新一次实现（/reload 后靠这一步接管旧服务的回调）
-		refreshImplementations(ctx);
+		syncCtx(ctx);
 		if (S.handle) return S.handle;
 		await mkdir(OUT_DIR, { recursive: true });
 		await ensureAssets();

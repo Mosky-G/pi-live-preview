@@ -99,28 +99,31 @@ body.resizing #side-resizer { background: var(--accent-user); }
 	border-right: 1px solid var(--side-line);
 	font-size: 12.5px;
 }
-/* 展开/收起按钮：始终在侧栏【外侧】右缘（展开时跟侧栏宽度走，收起时贴左上） */
+/* 展开/收起按钮：fixed 定位跟随侧栏宽度（贴侧栏右缘内侧）
+   之前隐形的原因：底色 #141414 与页面背景 #151b23 几乎同色，对比度不够 */
 #side-toggle {
 	position: fixed;
 	top: 12px;
-	left: calc(min(var(--side-w), 45vw) + 6px);
-	z-index: 50;
-	width: 22px;
-	height: 22px;
+	left: calc(min(var(--side-w), 45vw) - 32px);
+	z-index: 60;
+	width: 24px;
+	height: 24px;
 	line-height: 1;
 	padding: 0;
-	background: #141414f2;
-	color: var(--dim);
-	border: 1px solid var(--line);
-	border-radius: 5px;
+	background: #33404d;
+	color: #e8eef5;
+	border: 1px solid #4d5c6b;
+	border-radius: 6px;
 	cursor: pointer;
-	font-size: 12px;
+	font-size: 13px;
+	font-weight: 600;
+	box-shadow: 0 1px 5px rgba(0, 0, 0, 0.55);
 	backdrop-filter: blur(4px);
-	transition: left 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+	transition: left 0.28s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s, border-color 0.15s;
 }
-#side-toggle:hover { color: var(--fg); background: #1e1e1e; }
-body.side-collapsed #side-toggle { left: 6px; }
-body.resizing #side-toggle { transition: none; }
+#side-toggle:hover { background: #46586a; border-color: #6b7d8f; color: #ffffff; }
+body.side-collapsed #side-toggle { left: 10px; }
+body.resizing #side-toggle { transition: background 0.15s, border-color 0.15s; }
 
 /* 侧栏收起/展开用 View Transitions 做整体交叉淡化，避免正文重排的逐字跳动感 */
 ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 0.24s; }
@@ -131,32 +134,46 @@ body.resizing #side-toggle { transition: none; }
 	border-bottom: 1px solid var(--line);
 	margin-bottom: 8px;
 }
-.side-head .dim { font-weight: 400; }
-
-/* 当前 goal 卡片（/goal 进行中时显示） */
-.side-goal {
-	margin: 0 0 8px;
-	padding: 6px 8px 6px 9px;
-	border-radius: 6px;
-	background: #1d2732;
-	border-left: 2px solid var(--accent-assistant);
-	color: #cfe0cf;
-	font-size: 12px;
+/* ---------- 当前 goal：底部固定条（始终可见） ---------- */
+#goal-bar {
+	position: sticky;
+	bottom: 0;
+	z-index: 20;
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	margin: 0 26px 10px;
+	padding: 7px 12px;
+	border-radius: 8px;
+	background: #1d2732f5;
+	border-left: 3px solid var(--accent-assistant);
+	color: #d5e4d6;
+	font-size: 12.5px;
 	line-height: 1.45;
-	display: -webkit-box;
-	-webkit-line-clamp: 5;
-	-webkit-box-orient: vertical;
+	backdrop-filter: blur(5px);
+	box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+}
+#goal-bar[hidden] { display: none; }
+#goal-bar .goal-tag {
+	flex: 0 0 auto;
+	color: var(--accent-assistant);
+	font-size: 11px;
+	white-space: nowrap;
+}
+#goal-bar .goal-text {
+	flex: 1 1 auto;
 	overflow: hidden;
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
 	word-break: break-word;
 }
-.side-goal[hidden] { display: none; }
-.side-goal .goal-tag {
-	display: block;
-	font-size: 10.5px;
-	color: var(--accent-assistant);
-	margin-bottom: 2px;
-	letter-spacing: 0.3px;
-}
+/* 实时页里它嵌在输入条内部，不再需要 sticky */
+#live-bar #goal-bar { position: static; margin: 0 0 6px; box-shadow: none; }
+
+.side-head .dim { font-weight: 400; }
+
+/* goal 改为底部固定条，样式见文件末尾的 #goal-bar */
 .side-nav { display: flex; flex-direction: column; gap: 1px; }
 .side-nav a {
 	display: block;
@@ -327,12 +344,17 @@ pre code .hljs-deletion { color: #cc6666; }
 	position: sticky;
 	bottom: 0;
 	display: flex;
-	gap: 8px;
-	align-items: flex-end;
+	flex-direction: column;
+	align-items: stretch;
 	padding: 10px 26px 14px;
 	background: color-mix(in srgb, var(--bg) 92%, transparent);
 	backdrop-filter: blur(6px);
 	border-top: 1px solid var(--line);
+}
+#live-bar .live-row {
+	display: flex;
+	gap: 8px;
+	align-items: flex-end;
 }
 /* 输入框上缘拖拽条：像侧栏一样可上下拖动调整高度（带可见把手，好找） */
 #live-resizer {

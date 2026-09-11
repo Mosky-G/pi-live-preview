@@ -190,13 +190,13 @@ ${viewerCss}
 <div id="shell">
 	<aside id="sidebar">
 		<div class="side-head">会话预览<span class="dim" id="t-session"></span></div>
-		<div class="side-goal" id="t-goal" hidden></div>
 		<nav class="side-nav" id="toc"></nav>
 		<div class="side-foot dim" id="t-meta"></div>
 	</aside>
 	<div id="side-resizer"></div>
 	<section id="pane">
 		<main id="content"></main>
+		<div id="goal-bar" hidden></div>
 	</section>
 </div>
 <script id="session-data" type="application/json">${payload}</script>
@@ -230,7 +230,6 @@ ${viewerCss}
 <div id="shell">
 	<aside id="sidebar">
 		<div class="side-head">实时预览<span class="dim" id="t-session"></span></div>
-		<div class="side-goal" id="t-goal" hidden></div>
 		<nav class="side-nav" id="toc"></nav>
 		<div class="side-foot dim" id="t-meta"></div>
 	</aside>
@@ -239,9 +238,12 @@ ${viewerCss}
 		<main id="content"></main>
 		<div id="live-bar" class="locked">
 			<div id="live-resizer"></div>
-			<textarea id="live-input" rows="1" disabled placeholder="输入已在终端锁定：在 pi 里执行 /live input 解锁"></textarea>
-			<button id="live-send" type="button" disabled>发送</button>
-			<span id="live-status" class="live-status">连接中…</span>
+			<div id="goal-bar" hidden></div>
+			<div class="live-row">
+				<textarea id="live-input" rows="1" disabled placeholder="输入已在终端锁定：在 pi 里执行 /live input 解锁"></textarea>
+				<button id="live-send" type="button" disabled>发送</button>
+				<span id="live-status" class="live-status">连接中…</span>
+			</div>
 		</div>
 	</section>
 </div>
