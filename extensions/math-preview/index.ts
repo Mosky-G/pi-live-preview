@@ -16,7 +16,7 @@
  * 实时服务会保留，并把页面内容整体重载为当前分支（reset 事件）。
  */
 import { execFile } from "node:child_process";
-import { cp, mkdir, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +24,8 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { cleanupPages, exists } from "./fsutil.ts";
 import { startLiveServer, type LiveServerHandle } from "./live-server.ts";
 import { buildHtml, buildItems, buildLiveHtml, messageToItem, tailByRounds, type UsageSummary } from "./render.ts";
+// 仅类型导入（编译期擦除）：真正加载 translate-service 是运行时按开关动态 import
+import type { TranslateConfig } from "./translate-service.ts";
 
 const EXT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -266,9 +268,13 @@ function liveState(): LiveState {
  */
 function installImplementations(): void {
 	const S = liveState();
-	S.pageHtmlImpl = () => {
+	S.pageHtmlImpl = async () => {
 		const ctx = S.ctx;
-		return buildLiveHtml({ sessionId: sessionShortId(ctx), sessionName: sessionNameOf(ctx), cwd: ctx?.cwd ?? "" });
+		const translate = await isTranslateEnabled();
+		return buildLiveHtml(
+			{ sessionId: sessionShortId(ctx), sessionName: sessionNameOf(ctx), cwd: ctx?.cwd ?? "" },
+			{ translate },
+		);
 	};
 	S.snapshotImpl = () => {
 		const ctx = S.ctx;
@@ -286,6 +292,16 @@ function installImplementations(): void {
 			},
 		};
 	};
+}
+
+/** 翻译开关（读 settings.json；页面请求时才读，开销极小） */
+async function isTranslateEnabled(): Promise<boolean> {
+	try {
+		const text = await readFile(join(AGENT_DIR, "settings.json"), "utf8");
+		return (JSON.parse(text) as any)?.mathPreview?.translate?.enabled === true;
+	} catch {
+		return false;
+	}
 }
 
 /** 更新全局 ctx（每个事件 / 命令处理器开头调一次，开销极小） */
@@ -475,6 +491,35 @@ export default function mathPreview(pi: ExtensionAPI) {
 		S.ctx = null;
 	});
 
+	/**
+	 * 读 settings.json 里的 mathPreview.translate 配置。
+	 * 只有 enabled === true 时才动态 import 翻译模块 —— 关闭状态下这两个文件根本不会加载。
+	 */
+	async function loadTranslate(): Promise<{ module: any; config: TranslateConfig; limiter: any; gate: any } | null> {
+		let raw: unknown;
+		try {
+			const text = await readFile(join(AGENT_DIR, "settings.json"), "utf8");
+			raw = (JSON.parse(text) as any)?.mathPreview?.translate;
+		} catch {
+			return null; // 读不到设置就当作关闭
+		}
+		if ((raw as any)?.enabled !== true) return null;
+		try {
+			const module = await import("./translate-service.ts");
+			const config = module.normalizeTranslateConfig(raw);
+			if (!config.enabled) return null;
+			return {
+				module,
+				config,
+				limiter: new module.RateLimiter(config.maxRequestsPerMinute),
+				gate: new module.ConcurrencyGate(config.maxConcurrent),
+			};
+		} catch (err) {
+			console.error("[math-preview] 翻译模块加载失败:", err);
+			return null;
+		}
+	}
+
 	async function ensureLive(ctx: ExtensionCommandContext): Promise<LiveServerHandle> {
 		syncCtx(ctx);
 		if (S.handle) return S.handle;
@@ -483,6 +528,7 @@ export default function mathPreview(pi: ExtensionAPI) {
 		S.items = buildItems(ctx.sessionManager.getBranch());
 		S.openIndex = null;
 		S.indexByMessage = new WeakMap();
+		const translate = await loadTranslate();
 		const handle = await startLiveServer({
 			assetsDir: ASSETS_DIR,
 			// 每次都调当前实例注册的实现，而不是启动时的旧闭包
@@ -493,8 +539,32 @@ export default function mathPreview(pi: ExtensionAPI) {
 				pi.sendUserMessage(text);
 			},
 			onLog: (message) => ctx.ui.notify(message, "warn"),
+			extraRoutes: translate
+				? async (req, res, url) => {
+						if (url.pathname !== "/translate") return false;
+						await translate.module.handleTranslateRequest({
+							req,
+							res,
+							url,
+							token: S.handle?.token ?? "",
+							getCtx: () => S.ctx,
+							config: translate.config,
+							limiter: translate.limiter,
+							gate: translate.gate,
+							broadcast: (event) => S.handle?.broadcast(event),
+							onLog: (message) => ctx.ui.notify(message, "warn"),
+						});
+						return true;
+					}
+				: undefined,
 		});
 		S.handle = handle;
+		if (translate) {
+			ctx.ui.notify(
+				`翻译已启用（模型：${translate.config.model ?? "自动选最便宜的可用模型"}，目标语言：${translate.config.targetLang}）`,
+				"info",
+			);
+		}
 		return handle;
 	}
 
@@ -611,17 +681,21 @@ export default function mathPreview(pi: ExtensionAPI) {
 				const sessionId = sessionShortId(ctx);
 				const file = await uniquePagePath(`${sessionId}-${timeStamp()}`);
 
-				const html = await buildHtml(items, {
-					sessionId,
-					sessionName: sessionNameOf(ctx),
-					sessionFile,
-					cwd: ctx.cwd ?? "",
-					usage: usageInfo(ctx, entries),
-					goal: goalInfo(entries),
-					generatedAt: new Date().toLocaleString(),
-					totalItems: all.length,
-					shownItems: items.length,
-				});
+				const html = await buildHtml(
+					items,
+					{
+						sessionId,
+						sessionName: sessionNameOf(ctx),
+						sessionFile,
+						cwd: ctx.cwd ?? "",
+						usage: usageInfo(ctx, entries),
+						goal: goalInfo(entries),
+						generatedAt: new Date().toLocaleString(),
+						totalItems: all.length,
+						shownItems: items.length,
+					},
+					{ translate: await isTranslateEnabled() },
+				);
 				await writeFile(file, html, "utf8");
 
 				const cleaned = await cleanupPages(OUT_DIR, cfg.keep);

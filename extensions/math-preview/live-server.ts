@@ -33,6 +33,11 @@ export interface LiveServerOptions {
 	isInputEnabled: () => boolean;
 	onPrompt: (text: string) => Promise<void>;
 	onLog?: (message: string) => void;
+	/**
+	 * 额外路由钩子（插件用，如翻译）：返回 true 表示已处理该请求。
+	 * 调用时机：Host/Origin 校验之后、内置路由之前；token 校验由钩子自行处理。
+	 */
+	extraRoutes?: (req: IncomingMessage, res: ServerResponse, url: URL) => boolean | Promise<boolean>;
 }
 
 export interface LiveServerHandle {
@@ -112,6 +117,12 @@ export async function startLiveServer(opts: LiveServerOptions): Promise<LiveServ
 		try {
 			if (!hostOk(req)) return send(res, 403, "forbidden: bad host");
 			if (!originOk(req)) return send(res, 403, "forbidden: bad origin");
+
+			// 插件路由（翻译等，由调用方按 settings 开关注入）
+			if (opts.extraRoutes) {
+				const handled = await opts.extraRoutes(req, res, url);
+				if (handled) return;
+			}
 
 			// SSE 事件流
 			if (url.pathname === "/events") {
