@@ -238,6 +238,8 @@ interface LiveState {
 	 */
 	pageHtmlImpl: (() => string | Promise<string>) | null;
 	snapshotImpl: (() => { items: unknown[]; meta: Record<string, unknown> }) | null;
+	/** 插件路由（翻译等）：同样走全局实现，服务不重建也能热更新 */
+	extraRoutesImpl: ((req: any, res: any, url: URL) => boolean | Promise<boolean>) | null;
 }
 
 const STATE_KEY = "__piLivePreviewState";
@@ -256,15 +258,63 @@ function liveState(): LiveState {
 			ctx: null,
 			pageHtmlImpl: null,
 			snapshotImpl: null,
+			extraRoutesImpl: null,
 		} satisfies LiveState;
 	}
 	return g[STATE_KEY] as LiveState;
 }
 
+/** 配置/模块缓存：同一配置下复用 limiter 与 gate，否则限速形同虚设 */
+let translateRuntimeCache: { key: string; module: any; config: TranslateConfig; limiter: any; gate: any } | null = null;
+
+/** 最小 JSON 响应（不想为一个错误消息引入 http 工具） */
+function sendJsonLite(res: any, status: number, data: unknown): void {
+	try {
+		res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+		res.end(JSON.stringify(data));
+	} catch {
+		/* 连接可能已断开 */
+	}
+}
+
 /**
- * 用全局 ctx 安装「当前模块版本」的页面 HTML / 快照实现。
+ * 按 settings 开关加载翻译模块（带缓存，便于限速/并发状态持续）。
+ * 未启用时返回 null，且不加载任何翻译代码。
+ * 每次请求都会重读 settings —— 所以改完配置不需要重启服务，刷新页面即可生效。
+ */
+async function loadTranslateRuntime(): Promise<typeof translateRuntimeCache> {
+	let raw: unknown;
+	try {
+		const text = await readFile(join(AGENT_DIR, "settings.json"), "utf8");
+		raw = (JSON.parse(text) as any)?.mathPreview?.translate;
+	} catch {
+		return null;
+	}
+	if ((raw as any)?.enabled !== true) return null;
+	const key = JSON.stringify(raw ?? {});
+	if (translateRuntimeCache?.key === key) return translateRuntimeCache;
+	try {
+		const module = await import("./translate-service.ts");
+		const config = module.normalizeTranslateConfig(raw);
+		if (!config.enabled) return null;
+		translateRuntimeCache = {
+			key,
+			module,
+			config,
+			limiter: new module.RateLimiter(config.maxRequestsPerMinute),
+			gate: new module.ConcurrencyGate(config.maxConcurrent),
+		};
+		return translateRuntimeCache;
+	} catch (err) {
+		console.error("[math-preview] 翻译模块加载失败:", err);
+		return null;
+	}
+}
+
+/**
+ * 用全局 ctx 安装「当前模块版本」的页面 HTML / 快照 / 插件路由实现。
  * 必须在扩展工厂加载时调用：/reload 后新实例立即接管服务回调，
- * 否则服务会一直用启动时那个旧闭包（meta 里永远缺新加的字段）。
+ * 否则服务会一直用启动时那个旧闭包（新功能永远不生效）。
  */
 function installImplementations(): void {
 	const S = liveState();
@@ -291,6 +341,31 @@ function installImplementations(): void {
 				totalItems: S.items.length,
 			},
 		};
+	};
+	// 插件路由：运行时才判断开关，所以改完 settings 不用重启服务
+	S.extraRoutesImpl = async (req: any, res: any, url: URL) => {
+		if (url.pathname !== "/translate") return false;
+		const runtime = await loadTranslateRuntime();
+		if (!runtime) {
+			sendJsonLite(res, 404, {
+				ok: false,
+				error: "翻译未启用：请在 settings.json 里设置 mathPreview.translate.enabled = true（改完 /reload 或直接刷新页面）",
+			});
+			return true;
+		}
+		await runtime.module.handleTranslateRequest({
+			req,
+			res,
+			url,
+			token: S.handle?.token ?? "",
+			getCtx: () => S.ctx,
+			config: runtime.config,
+			limiter: runtime.limiter,
+			gate: runtime.gate,
+			broadcast: (event) => S.handle?.broadcast(event),
+			onLog: (message) => console.warn("[math-preview] " + message),
+		});
+		return true;
 	};
 }
 
@@ -496,28 +571,7 @@ export default function mathPreview(pi: ExtensionAPI) {
 	 * 只有 enabled === true 时才动态 import 翻译模块 —— 关闭状态下这两个文件根本不会加载。
 	 */
 	async function loadTranslate(): Promise<{ module: any; config: TranslateConfig; limiter: any; gate: any } | null> {
-		let raw: unknown;
-		try {
-			const text = await readFile(join(AGENT_DIR, "settings.json"), "utf8");
-			raw = (JSON.parse(text) as any)?.mathPreview?.translate;
-		} catch {
-			return null; // 读不到设置就当作关闭
-		}
-		if ((raw as any)?.enabled !== true) return null;
-		try {
-			const module = await import("./translate-service.ts");
-			const config = module.normalizeTranslateConfig(raw);
-			if (!config.enabled) return null;
-			return {
-				module,
-				config,
-				limiter: new module.RateLimiter(config.maxRequestsPerMinute),
-				gate: new module.ConcurrencyGate(config.maxConcurrent),
-			};
-		} catch (err) {
-			console.error("[math-preview] 翻译模块加载失败:", err);
-			return null;
-		}
+		return loadTranslateRuntime();
 	}
 
 	async function ensureLive(ctx: ExtensionCommandContext): Promise<LiveServerHandle> {
@@ -539,24 +593,7 @@ export default function mathPreview(pi: ExtensionAPI) {
 				pi.sendUserMessage(text);
 			},
 			onLog: (message) => ctx.ui.notify(message, "warn"),
-			extraRoutes: translate
-				? async (req, res, url) => {
-						if (url.pathname !== "/translate") return false;
-						await translate.module.handleTranslateRequest({
-							req,
-							res,
-							url,
-							token: S.handle?.token ?? "",
-							getCtx: () => S.ctx,
-							config: translate.config,
-							limiter: translate.limiter,
-							gate: translate.gate,
-							broadcast: (event) => S.handle?.broadcast(event),
-							onLog: (message) => ctx.ui.notify(message, "warn"),
-						});
-						return true;
-					}
-				: undefined,
+			extraRoutes: (req, res, url) => S.extraRoutesImpl?.(req, res, url) ?? false,
 		});
 		S.handle = handle;
 		if (translate) {

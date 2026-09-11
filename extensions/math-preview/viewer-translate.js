@@ -175,19 +175,37 @@
 			body: JSON.stringify({ blockId: blockId, text: text, targetLang: LANG }),
 		})
 			.then(function (r) {
-				return r.json().catch(function () {
-					return {};
+				return r.text().then(function (body) {
+					var j = null;
+					try {
+						j = JSON.parse(body);
+					} catch (e) {
+						j = null;
+					}
+					if (!j) {
+						// 不是 JSON：多半是 404 页面（当前服务没有翻译路由）
+						openOverlay(
+							"翻译失败（HTTP " + r.status + "）",
+							'<span class="pi-tr-error">服务未返回 JSON。如果是 404，说明这个 /live 服务还没有翻译路由——请在 pi 里重新执行 /live off 然后 /live（服务需要重建一次）。</span>',
+						);
+						if (current && current.btn) {
+							current.btn.disabled = false;
+							current.btn.textContent = "译";
+						}
+						current = null;
+						return;
+					}
+					if (!j.ok) {
+						openOverlay("翻译失败", '<span class="pi-tr-error">' + esc(j.error || "未知错误") + "</span>");
+						if (current && current.btn) {
+							current.btn.disabled = false;
+							current.btn.textContent = "译";
+						}
+						current = null;
+					} else if (j.model) {
+						setStatus(j.model);
+					}
 				});
-			})
-			.then(function (j) {
-				if (!j || !j.ok) {
-					openOverlay("翻译失败", '<span class="pi-tr-error">' + esc((j && j.error) || "未知错误") + "</span>");
-					btn.disabled = false;
-					btn.textContent = "译";
-					current = null;
-				} else if (j.model) {
-					setStatus(j.model);
-				}
 			})
 			.catch(function (e) {
 				openOverlay("翻译失败", '<span class="pi-tr-error">' + esc(e && e.message ? e.message : e) + "</span>");
