@@ -387,6 +387,19 @@
 			if (meta.cwd) lines.push(meta.cwd);
 			m.textContent = lines.join("\n");
 		}
+		// 当前 goal（由 /goal 写入的 session entry 提供）
+		var g = document.getElementById("t-goal");
+		if (g) {
+			var goal = meta.goal;
+			if (goal && goal.text) {
+				g.hidden = false;
+				var tagText = goal.iteration > 1 ? "目标 · 第 " + goal.iteration + " 轮" : "当前目标";
+				g.innerHTML = '<span class="goal-tag">' + esc(tagText) + "</span>" + esc(goal.text);
+				g.title = goal.text;
+			} else {
+				g.hidden = true;
+			}
+		}
 	}
 
 	function buildSidebar() {
@@ -513,7 +526,15 @@
 		if (!btn) return;
 		var KEY = "pi-preview-side-collapsed";
 		var apply = function (collapsed) {
-			document.body.classList.toggle("side-collapsed", collapsed);
+			var change = function () {
+				document.body.classList.toggle("side-collapsed", collapsed);
+			};
+			// 用 View Transitions 做整体交叉淡化：避免正文宽度突变时逐字重排的卡顶感
+			if (typeof document.startViewTransition === "function") {
+				document.startViewTransition(change);
+			} else {
+				change();
+			}
 			btn.textContent = collapsed ? "»" : "«";
 			btn.title = collapsed ? "展开目录" : "收起目录";
 		};

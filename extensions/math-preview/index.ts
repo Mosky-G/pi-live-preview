@@ -126,6 +126,24 @@ function sessionNameOf(ctx: any): string {
 	}
 }
 
+/**
+ * 读取当前活跃 goal。
+ * @narumitw/pi-goal 把状态存在 session entry（custom / goal-state）里，
+ * 取最后一条：不是活跃状态（完成/清除）就当作无目标 —— 与其官方实现一致。
+ */
+function goalInfo(entries: any[]): { text: string; status: string; iteration: number } | null {
+	for (let i = (entries?.length ?? 0) - 1; i >= 0; i--) {
+		const e = entries[i];
+		if (e?.type !== "custom" || e.customType !== "goal-state") continue;
+		const goal = e.data?.goal;
+		if (goal && typeof goal.text === "string" && goal.status && goal.status !== "complete") {
+			return { text: goal.text, status: String(goal.status), iteration: Number(goal.iteration) || 0 };
+		}
+		return null;
+	}
+	return null;
+}
+
 /** 上下文用量 + 累计花费（费用由每条 assistant 消息的 usage.cost 累加） */
 function usageInfo(ctx: any, entries: any[]): UsageSummary {
 	let cost = 0;
@@ -250,6 +268,7 @@ function reloadForContext(ctx: any, reason: string): void {
 		meta: {
 			...S.getContext(),
 			usage: usageInfo(ctx, entries),
+			goal: goalInfo(entries),
 			generatedAt: new Date().toLocaleString(),
 			totalItems: S.items.length,
 		},
@@ -269,6 +288,7 @@ export default function mathPreview(pi: ExtensionAPI) {
 			meta: {
 				...S.getContext(),
 				usage: usageInfo(ctx, entries),
+				goal: goalInfo(entries),
 				generatedAt: new Date().toLocaleString(),
 				totalItems: S.items.length,
 			},
@@ -423,6 +443,7 @@ export default function mathPreview(pi: ExtensionAPI) {
 				meta: {
 					...(S.getContext?.() ?? { sessionId: "unknown", sessionName: "", cwd: "" }),
 					usage: usageInfo(ctx, ctx.sessionManager.getBranch()),
+					goal: goalInfo(ctx.sessionManager.getBranch()),
 					generatedAt: new Date().toLocaleString(),
 					totalItems: S.items.length,
 				},
@@ -556,6 +577,7 @@ export default function mathPreview(pi: ExtensionAPI) {
 					sessionFile,
 					cwd: ctx.cwd ?? "",
 					usage: usageInfo(ctx, entries),
+					goal: goalInfo(entries),
 					generatedAt: new Date().toLocaleString(),
 					totalItems: all.length,
 					shownItems: items.length,

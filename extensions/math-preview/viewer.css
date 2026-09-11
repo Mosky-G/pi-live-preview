@@ -99,30 +99,64 @@ body.resizing #side-resizer { background: var(--accent-user); }
 	border-right: 1px solid var(--side-line);
 	font-size: 12.5px;
 }
+/* 展开/收起按钮：移出侧栏（否则会被侧栏的 opacity:0 一起变透明）、fixed 定位跟随侧栏宽度 */
 #side-toggle {
-	position: absolute;
+	position: fixed;
 	top: 12px;
-	right: 8px;
+	left: calc(min(var(--side-w), 45vw) - 32px);
+	z-index: 50;
 	width: 22px;
 	height: 22px;
 	line-height: 1;
 	padding: 0;
-	background: #141414;
+	background: #141414f2;
 	color: var(--dim);
 	border: 1px solid var(--line);
 	border-radius: 5px;
 	cursor: pointer;
 	font-size: 12px;
+	backdrop-filter: blur(4px);
+	transition: left 0.28s cubic-bezier(0.4, 0, 0.2, 1);
 }
 #side-toggle:hover { color: var(--fg); background: #1e1e1e; }
+body.side-collapsed #side-toggle { left: 10px; }
+body.resizing #side-toggle { transition: none; }
+
+/* 侧栏收起/展开用 View Transitions 做整体交叉淡化，避免正文重排的逐字跳动感 */
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: 0.3s; }
 .side-head {
 	font-weight: 600;
 	font-size: 13px;
-	padding: 2px 30px 8px 8px;
+	padding: 2px 8px 8px;
 	border-bottom: 1px solid var(--line);
 	margin-bottom: 8px;
 }
 .side-head .dim { font-weight: 400; }
+
+/* 当前 goal 卡片（/goal 进行中时显示） */
+.side-goal {
+	margin: 0 0 8px;
+	padding: 6px 8px 6px 9px;
+	border-radius: 6px;
+	background: #1d2732;
+	border-left: 2px solid var(--accent-assistant);
+	color: #cfe0cf;
+	font-size: 12px;
+	line-height: 1.45;
+	display: -webkit-box;
+	-webkit-line-clamp: 5;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+	word-break: break-word;
+}
+.side-goal[hidden] { display: none; }
+.side-goal .goal-tag {
+	display: block;
+	font-size: 10.5px;
+	color: var(--accent-assistant);
+	margin-bottom: 2px;
+	letter-spacing: 0.3px;
+}
 .side-nav { display: flex; flex-direction: column; gap: 1px; }
 .side-nav a {
 	display: block;
@@ -157,14 +191,6 @@ body.side-collapsed #sidebar {
 body.side-collapsed #side-resizer { display: none; }
 /* 拖拽时不要过渡，否则手感发飘 */
 body.resizing #sidebar { transition: none; }
-body.side-collapsed #side-toggle {
-	position: fixed;
-	left: 10px;
-	top: 12px;
-	right: auto;
-	z-index: 40;
-	background: #141414cc;
-}
 body.side-collapsed #content { padding-left: 58px; }
 
 /* ---------- 正文 ---------- */

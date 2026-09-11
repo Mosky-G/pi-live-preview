@@ -33,6 +33,8 @@ export interface PreviewMeta {
 	sessionName?: string;
 	/** 上下文用量与累计花费 */
 	usage?: UsageSummary;
+	/** 当前活跃 goal（由 @narumitw/pi-goal 写入的 session entry 提供） */
+	goal?: { text: string; status: string; iteration: number } | null;
 }
 
 /** 消息 content（string 或多模态数组）→ 纯文本 */
@@ -184,10 +186,11 @@ ${viewerCss}
 </style>
 </head>
 <body>
+<button id="side-toggle" type="button">«</button>
 <div id="shell">
 	<aside id="sidebar">
-		<button id="side-toggle" type="button">«</button>
 		<div class="side-head">会话预览<span class="dim" id="t-session"></span></div>
+		<div class="side-goal" id="t-goal" hidden></div>
 		<nav class="side-nav" id="toc"></nav>
 		<div class="side-foot dim" id="t-meta"></div>
 	</aside>
@@ -223,10 +226,11 @@ ${viewerCss}
 </style>
 </head>
 <body>
+<button id="side-toggle" type="button">«</button>
 <div id="shell">
 	<aside id="sidebar">
-		<button id="side-toggle" type="button">«</button>
 		<div class="side-head">实时预览<span class="dim" id="t-session"></span></div>
+		<div class="side-goal" id="t-goal" hidden></div>
 		<nav class="side-nav" id="toc"></nav>
 		<div class="side-foot dim" id="t-meta"></div>
 	</aside>
