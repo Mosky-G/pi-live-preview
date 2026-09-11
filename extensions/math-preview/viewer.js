@@ -37,12 +37,29 @@
 		});
 	}
 
-	function timeOf(t) {
+	/** 侧栏目录用：月-日 时:分（长会话可能跨天，但不需要秒级精度） */
+	function timeShort(t) {
 		if (!t) return "";
 		var d = new Date(t);
 		if (isNaN(d.getTime())) return "";
 		var p = function (n) { return String(n).padStart(2, "0"); };
-		return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+		return p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+	}
+
+	/** 正文条目头用：年-月-日 时:分:秒（空间充足，便于定位） */
+	function timeFull(t) {
+		if (!t) return "";
+		var d = new Date(t);
+		if (isNaN(d.getTime())) return "";
+		var p = function (n) { return String(n).padStart(2, "0"); };
+		return (
+			d.getFullYear() +
+			"-" + p(d.getMonth() + 1) +
+			"-" + p(d.getDate()) +
+			" " + p(d.getHours()) +
+			":" + p(d.getMinutes()) +
+			":" + p(d.getSeconds())
+		);
 	}
 
 	function truncate(s, n) {
@@ -256,7 +273,7 @@
 	}
 
 	function itemHtml(it, idx) {
-		var time = timeOf(it.time);
+		var time = timeFull(it.time);
 		switch (it.kind) {
 			case "user":
 				return (
@@ -380,8 +397,8 @@
 			if (it.kind !== "user") return;
 			var label = String(it.text || "").replace(/\s+/g, " ").trim().slice(0, 46) || "（空输入）";
 			links.push(
-				'<a href="#item-' + idx + '" data-idx="' + idx + '" title="' + esc(label) + '">' +
-				'<span class="t">' + timeOf(it.time) + "</span>" + esc(label) + "</a>",
+				'<a href="#item-' + idx + '" data-idx="' + idx + '" title="' + esc(timeFull(it.time) + "  " + label) + '">' +
+				'<span class="t">' + timeShort(it.time) + "</span>" + esc(label) + "</a>",
 			);
 		});
 		nav.innerHTML = links.length
@@ -629,7 +646,8 @@
 		renderMath: renderMath,
 		itemHtml: htmlFor,
 		esc: esc,
-		timeOf: timeOf,
+		timeShort: timeShort,
+		timeFull: timeFull,
 		setupSidebarToggle: setupSidebarToggle,
 		setupResizer: setupResizer,
 		writeDiag: writeDiag,
