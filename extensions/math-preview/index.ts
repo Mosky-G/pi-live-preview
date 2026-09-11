@@ -230,6 +230,12 @@ interface LiveState {
 	flushTimer: ReturnType<typeof setTimeout> | null;
 	/** 最近一次会话上下文（页面刷新时生成 HTML / 快照用） */
 	getContext: (() => { sessionId: string; sessionName: string; cwd: string }) | null;
+	/**
+	 * 服务回调的实现，由最近一次保证过的扩展实例写入。
+	 * 这样 /reload 后即使服务不重建，也会用上新代码（否则 meta 会永远缺字段）。
+	 */
+	pageHtmlImpl: (() => string | Promise<string>) | null;
+	snapshotImpl: (() => { items: unknown[]; meta: Record<string, unknown> }) | null;
 }
 
 const STATE_KEY = "__piLivePreviewState";
@@ -246,27 +252,56 @@ function liveState(): LiveState {
 			pendingUpdate: null,
 			flushTimer: null,
 			getContext: null,
+			pageHtmlImpl: null,
+			snapshotImpl: null,
 		} satisfies LiveState;
 	}
 	return g[STATE_KEY] as LiveState;
+}
+
+/**
+ * 注册“当前实例”的实现：页面 HTML 生成与快照。
+ * 会话切换 / recoil（reload）后扩展实例会被重建，旧闭包不该继续为新代码服务。
+ * 注意：快照读的是全局 S.items，而分支数据（usage/goal）现场从 ctx 取，保证信息最新。
+ */
+function refreshImplementations(ctx: any): void {
+	const S = liveState();
+	S.getContext = () => ({ sessionId: sessionShortId(ctx), sessionName: sessionNameOf(ctx), cwd: ctx?.cwd ?? "" });
+	S.pageHtmlImpl = () => {
+		const c = S.getContext?.() ?? { sessionId: "unknown", sessionName: "", cwd: "" };
+		return buildLiveHtml({ sessionId: c.sessionId, sessionName: c.sessionName, cwd: c.cwd });
+	};
+	S.snapshotImpl = () => {
+		const entries = ctx?.sessionManager?.getBranch?.() ?? [];
+		return {
+			items: S.items,
+			meta: {
+				...(S.getContext?.() ?? { sessionId: "unknown", sessionName: "", cwd: "" }),
+				usage: usageInfo(ctx, entries),
+				goal: goalInfo(entries),
+				generatedAt: new Date().toLocaleString(),
+				totalItems: S.items.length,
+			},
+		};
+	};
 }
 
 /** 用给定 ctx 重建页面内容并让前端整体重载（会话/分支变化时用） */
 function reloadForContext(ctx: any, reason: string): void {
 	const S = liveState();
 	if (!S.handle) return;
+	refreshImplementations(ctx);
 	const entries = ctx?.sessionManager?.getBranch?.() ?? [];
 	S.items = buildItems(entries);
 	S.openIndex = null;
 	S.indexByMessage = new WeakMap();
 	S.pendingUpdate = null;
-	S.getContext = () => ({ sessionId: sessionShortId(ctx), sessionName: sessionNameOf(ctx), cwd: ctx?.cwd ?? "" });
 	S.handle.broadcast({
 		type: "reset",
 		reason,
 		items: S.items,
 		meta: {
-			...S.getContext(),
+			...(S.getContext?.() ?? { sessionId: "unknown", sessionName: "", cwd: "" }),
 			usage: usageInfo(ctx, entries),
 			goal: goalInfo(entries),
 			generatedAt: new Date().toLocaleString(),
@@ -422,32 +457,19 @@ export default function mathPreview(pi: ExtensionAPI) {
 	});
 
 	async function ensureLive(ctx: ExtensionCommandContext): Promise<LiveServerHandle> {
-		if (S.handle) {
-			S.getContext = () => ({ sessionId: sessionShortId(ctx), sessionName: sessionNameOf(ctx), cwd: ctx.cwd ?? "" });
-			return S.handle;
-		}
+		// 无论服务是否已存在都刷新一次实现（/reload 后靠这一步接管旧服务的回调）
+		refreshImplementations(ctx);
+		if (S.handle) return S.handle;
 		await mkdir(OUT_DIR, { recursive: true });
 		await ensureAssets();
 		S.items = buildItems(ctx.sessionManager.getBranch());
 		S.openIndex = null;
 		S.indexByMessage = new WeakMap();
-		S.getContext = () => ({ sessionId: sessionShortId(ctx), sessionName: sessionNameOf(ctx), cwd: ctx.cwd ?? "" });
 		const handle = await startLiveServer({
 			assetsDir: ASSETS_DIR,
-			pageHtml: () => {
-				const c = S.getContext?.() ?? { sessionId: "unknown", sessionName: "", cwd: "" };
-				return buildLiveHtml({ sessionId: c.sessionId, sessionName: c.sessionName, cwd: c.cwd });
-			},
-			getSnapshot: () => ({
-				items: S.items,
-				meta: {
-					...(S.getContext?.() ?? { sessionId: "unknown", sessionName: "", cwd: "" }),
-					usage: usageInfo(ctx, ctx.sessionManager.getBranch()),
-					goal: goalInfo(ctx.sessionManager.getBranch()),
-					generatedAt: new Date().toLocaleString(),
-					totalItems: S.items.length,
-				},
-			}),
+			// 每次都调当前实例注册的实现，而不是启动时的旧闭包
+			pageHtml: () => S.pageHtmlImpl?.() ?? buildLiveHtml({ sessionId: "unknown", sessionName: "", cwd: "" }),
+			getSnapshot: () => S.snapshotImpl?.() ?? { items: S.items, meta: {} },
 			isInputEnabled: () => S.inputEnabled,
 			onPrompt: async (text) => {
 				pi.sendUserMessage(text);

@@ -99,11 +99,11 @@ body.resizing #side-resizer { background: var(--accent-user); }
 	border-right: 1px solid var(--side-line);
 	font-size: 12.5px;
 }
-/* 展开/收起按钮：移出侧栏（否则会被侧栏的 opacity:0 一起变透明）、fixed 定位跟随侧栏宽度 */
+/* 展开/收起按钮：始终在侧栏【外侧】右缘（展开时跟侧栏宽度走，收起时贴左上） */
 #side-toggle {
 	position: fixed;
 	top: 12px;
-	left: calc(min(var(--side-w), 45vw) - 32px);
+	left: calc(min(var(--side-w), 45vw) + 6px);
 	z-index: 50;
 	width: 22px;
 	height: 22px;
@@ -119,11 +119,11 @@ body.resizing #side-resizer { background: var(--accent-user); }
 	transition: left 0.28s cubic-bezier(0.4, 0, 0.2, 1);
 }
 #side-toggle:hover { color: var(--fg); background: #1e1e1e; }
-body.side-collapsed #side-toggle { left: 10px; }
+body.side-collapsed #side-toggle { left: 6px; }
 body.resizing #side-toggle { transition: none; }
 
 /* 侧栏收起/展开用 View Transitions 做整体交叉淡化，避免正文重排的逐字跳动感 */
-::view-transition-old(root), ::view-transition-new(root) { animation-duration: 0.3s; }
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: 0.24s; }
 .side-head {
 	font-weight: 600;
 	font-size: 13px;
@@ -205,6 +205,10 @@ body.side-collapsed #content { padding-left: 58px; }
 	padding: 10px 16px;
 	margin: 14px 0;
 	scroll-margin-top: 16px;
+	/* 长会话（几百个卡片）下，离屏卡片跳过布局与绘制，
+	   显著降低正文宽度变化时的重排开销 */
+	content-visibility: auto;
+	contain-intrinsic-size: auto 200px;
 }
 .item > header {
 	display: flex;
