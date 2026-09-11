@@ -51,11 +51,15 @@
 		return { text: s.slice(0, n) + "\n…（预览已截断，共 " + s.length + " 字符）", truncated: true };
 	}
 
-	/** 判断 $...$ 里的内容是否真的像数学公式，避免把代码/正则/说明误当公式 */
-	function looksLikeMath(tex) {
+	/**
+	 * 判断 $...$ 里的内容是否真的像数学公式，避免把代码/正则/说明误当公式。
+	 * isDisplay：display 公式（$$...$$ / \[...\]）允许跨行、长度也更宽松；
+	 * 行内公式的匹配正则本身就不含换行，所以无须重复限制。
+	 */
+	function looksLikeMath(tex, isDisplay) {
 		var t = String(tex).trim();
-		if (!t || t.length > 400) return false;
-		if (/[\r\n]/.test(t)) return false;
+		var limit = isDisplay ? 2000 : 400;
+		if (!t || t.length > limit) return false;
 		// \s \d \w \n … 后面不再跟字母 → 是 JS 正则/字符串转义；若是 \sum \sqrt \nabla 等 LaTeX 命令则放行
 		if (/\\[dswntrDSWNTRbB](?![a-zA-Z])/.test(t)) return false;
 		if (/\(\?|\*\/|\/\/|=>|\[\^/.test(t)) return false;
@@ -181,16 +185,16 @@
 			return uid + "INLINECODE" + (inlines.length - 1) + "@@";
 		});
 		s = s.replace(/\$\$([\s\S]+?)\$\$/g, function (_m, tex) {
-			return looksLikeMath(tex) ? addMath(tex.trim(), true) : _m;
+			return looksLikeMath(tex, true) ? addMath(tex.trim(), true) : _m;
 		});
 		s = s.replace(/\\\[([\s\S]+?)\\\]/g, function (_m, tex) {
-			return looksLikeMath(tex) ? addMath(tex.trim(), true) : _m;
+			return looksLikeMath(tex, true) ? addMath(tex.trim(), true) : _m;
 		});
 		s = s.replace(/\\\(([\s\S]+?)\\\)/g, function (_m, tex) {
-			return looksLikeMath(tex) ? addMath(tex.trim(), false) : _m;
+			return looksLikeMath(tex, false) ? addMath(tex.trim(), false) : _m;
 		});
 		s = s.replace(/(^|[^\\$])\$(?!\s)([^\n$]+?)(?<!\s)\$(?!\$)/g, function (m, pre, tex) {
-			return looksLikeMath(tex) ? pre + addMath(tex, false) : m;
+			return looksLikeMath(tex, false) ? pre + addMath(tex, false) : m;
 		});
 
 		// 正文里的 HTML 标签不能当真实标签（否则 <script> 之类会吞掉页面后续内容），统一转义
