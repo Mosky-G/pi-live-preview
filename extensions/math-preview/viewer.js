@@ -329,6 +329,22 @@
 		return h || '<div class="item empty" id="item-' + idx + '" hidden></div>';
 	}
 
+	function formatTokens(n) {
+		if (typeof n !== "number" || !isFinite(n)) return "?";
+		if (n >= 1000000) return (n / 1000000).toFixed(2) + "M";
+		if (n >= 100000) return Math.round(n / 1000) + "k";
+		if (n >= 1000) return (n / 1000).toFixed(1) + "k";
+		return String(n);
+	}
+
+	function formatCost(c) {
+		if (typeof c !== "number" || !isFinite(c)) return "";
+		if (c <= 0) return "$0";
+		if (c < 0.01) return "$" + c.toFixed(4);
+		if (c < 1) return "$" + c.toFixed(3);
+		return "$" + c.toFixed(2);
+	}
+
 	function updateHeader() {
 		var s = document.getElementById("t-session");
 		var m = document.getElementById("t-meta");
@@ -339,10 +355,20 @@
 			document.title = (meta.sessionName || "新的对话") + TITLE_SUFFIX;
 		}
 		if (m) {
-			m.textContent =
-				(meta.totalItems && meta.totalItems !== items.length ? items.length + "/" + meta.totalItems + " 项" : items.length + " 项") +
-				(meta.generatedAt ? "\n" + meta.generatedAt : "") +
-				(meta.cwd ? "\n" + meta.cwd : "");
+			var lines = [];
+			lines.push(meta.totalItems && meta.totalItems !== items.length ? items.length + "/" + meta.totalItems + " 项" : items.length + " 项");
+			var u = meta.usage;
+			if (u) {
+				var ctxLine = "上下文 " + formatTokens(u.contextTokens);
+				if (u.contextWindow) ctxLine += " / " + formatTokens(u.contextWindow);
+				if (typeof u.contextPercent === "number") ctxLine += "（" + Math.round(u.contextPercent) + "%）";
+				lines.push(ctxLine);
+				var cost = formatCost(u.cost);
+				if (cost) lines.push("花费 " + cost);
+			}
+			if (meta.generatedAt) lines.push(meta.generatedAt);
+			if (meta.cwd) lines.push(meta.cwd);
+			m.textContent = lines.join("\n");
 		}
 	}
 

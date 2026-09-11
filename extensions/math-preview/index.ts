@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { cleanupPages, exists } from "./fsutil.ts";
 import { startLiveServer, type LiveServerHandle } from "./live-server.ts";
-import { buildHtml, buildItems, buildLiveHtml, messageToItem, tailByRounds } from "./render.ts";
+import { buildHtml, buildItems, buildLiveHtml, messageToItem, tailByRounds, type UsageSummary } from "./render.ts";
 
 const EXT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -126,6 +126,46 @@ function sessionNameOf(ctx: any): string {
 	}
 }
 
+/** 上下文用量 + 累计花费（费用由每条 assistant 消息的 usage.cost 累加） */
+function usageInfo(ctx: any, entries: any[]): UsageSummary {
+	let cost = 0;
+	let inputTokens = 0;
+	let outputTokens = 0;
+	let cacheReadTokens = 0;
+	let cacheWriteTokens = 0;
+	let model = "";
+	for (const e of entries ?? []) {
+		const m = e?.message;
+		if (!m || m.role !== "assistant") continue;
+		const u = m.usage;
+		if (u) {
+			cost += Number(u.cost?.total) || 0;
+			inputTokens += Number(u.input) || 0;
+			outputTokens += Number(u.output) || 0;
+			cacheReadTokens += Number(u.cacheRead) || 0;
+			cacheWriteTokens += Number(u.cacheWrite) || 0;
+		}
+		if (typeof m.model === "string" && m.model) model = m.model;
+	}
+	let usage: any;
+	try {
+		usage = ctx?.getContextUsage?.();
+	} catch {
+		usage = undefined;
+	}
+	return {
+		contextTokens: typeof usage?.tokens === "number" ? usage.tokens : null,
+		contextWindow: Number(usage?.contextWindow) || 0,
+		contextPercent: typeof usage?.percent === "number" ? usage.percent : null,
+		cost,
+		inputTokens,
+		outputTokens,
+		cacheReadTokens,
+		cacheWriteTokens,
+		model,
+	};
+}
+
 /** 保证页面文件名唯一：同一秒重复触发时追加 -1、-2 … */
 async function uniquePagePath(base: string): Promise<string> {
 	let path = join(OUT_DIR, `${base}.html`);
@@ -197,7 +237,8 @@ function liveState(): LiveState {
 function reloadForContext(ctx: any, reason: string): void {
 	const S = liveState();
 	if (!S.handle) return;
-	S.items = buildItems(ctx?.sessionManager?.getBranch?.() ?? []);
+	const entries = ctx?.sessionManager?.getBranch?.() ?? [];
+	S.items = buildItems(entries);
 	S.openIndex = null;
 	S.indexByMessage = new WeakMap();
 	S.pendingUpdate = null;
@@ -208,6 +249,7 @@ function reloadForContext(ctx: any, reason: string): void {
 		items: S.items,
 		meta: {
 			...S.getContext(),
+			usage: usageInfo(ctx, entries),
 			generatedAt: new Date().toLocaleString(),
 			totalItems: S.items.length,
 		},
@@ -216,6 +258,22 @@ function reloadForContext(ctx: any, reason: string): void {
 
 export default function mathPreview(pi: ExtensionAPI) {
 	const S = liveState();
+
+	/** 把最新 meta（含上下文用量与花费）推给页面 */
+	function broadcastMeta(ctx: any): void {
+		if (!S.handle) return;
+		const entries = ctx?.sessionManager?.getBranch?.() ?? [];
+		S.getContext = () => ({ sessionId: sessionShortId(ctx), sessionName: sessionNameOf(ctx), cwd: ctx?.cwd ?? "" });
+		S.handle.broadcast({
+			type: "meta",
+			meta: {
+				...S.getContext(),
+				usage: usageInfo(ctx, entries),
+				generatedAt: new Date().toLocaleString(),
+				totalItems: S.items.length,
+			},
+		});
+	}
 
 	function flushPending(): void {
 		S.flushTimer = null;
@@ -273,7 +331,7 @@ export default function mathPreview(pi: ExtensionAPI) {
 		scheduleUpdate(index, item);
 	});
 
-	pi.on("message_end", (event) => {
+	pi.on("message_end", (event, ctx) => {
 		if (!S.handle) return;
 		const message: any = (event as any).message;
 		const item = messageToItem(message);
@@ -284,11 +342,13 @@ export default function mathPreview(pi: ExtensionAPI) {
 			S.items.push(item);
 			S.indexByMessage.set(message, next);
 			S.handle.broadcast({ type: "append", item });
-			return;
+		} else {
+			S.items[index] = item;
+			S.handle.broadcast({ type: "update", index, item });
+			if (S.openIndex === index) S.openIndex = null;
 		}
-		S.items[index] = item;
-		S.handle.broadcast({ type: "update", index, item });
-		if (S.openIndex === index) S.openIndex = null;
+		// 一轮结束后费用/上下文会变，刷新侧栏信息
+		broadcastMeta(ctx);
 	});
 
 	pi.on("agent_start", () => {
@@ -297,19 +357,15 @@ export default function mathPreview(pi: ExtensionAPI) {
 	pi.on("agent_end", () => {
 		S.handle?.broadcast({ type: "status", busy: false });
 	});
-	pi.on("agent_settled", () => {
+	pi.on("agent_settled", (_event, ctx) => {
 		S.handle?.broadcast({ type: "status", busy: false });
+		if (ctx) broadcastMeta(ctx);
 	});
 
 	// ---------- 会话 / 分支 / 压缩：让页面整体重载，服务不中断 ----------
 	/** 会话名称变化：只更新 meta，不必重载内容 */
 	pi.on("session_info_changed", (_event, ctx) => {
-		if (!S.handle) return;
-		S.getContext = () => ({ sessionId: sessionShortId(ctx), sessionName: sessionNameOf(ctx), cwd: ctx?.cwd ?? "" });
-		S.handle.broadcast({
-			type: "meta",
-			meta: { ...S.getContext(), generatedAt: new Date().toLocaleString(), totalItems: S.items.length },
-		});
+		broadcastMeta(ctx);
 	});
 
 	/** 新建 / 恢复 / fork 会话：内容整体换成新会话的分支 */
@@ -366,6 +422,7 @@ export default function mathPreview(pi: ExtensionAPI) {
 				items: S.items,
 				meta: {
 					...(S.getContext?.() ?? { sessionId: "unknown", sessionName: "", cwd: "" }),
+					usage: usageInfo(ctx, ctx.sessionManager.getBranch()),
 					generatedAt: new Date().toLocaleString(),
 					totalItems: S.items.length,
 				},
@@ -498,6 +555,7 @@ export default function mathPreview(pi: ExtensionAPI) {
 					sessionName: sessionNameOf(ctx),
 					sessionFile,
 					cwd: ctx.cwd ?? "",
+					usage: usageInfo(ctx, entries),
 					generatedAt: new Date().toLocaleString(),
 					totalItems: all.length,
 					shownItems: items.length,

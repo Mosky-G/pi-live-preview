@@ -9,6 +9,19 @@ import { fileURLToPath } from "node:url";
 
 const EXT_DIR = dirname(fileURLToPath(import.meta.url));
 
+/** 上下文用量 + 累计花费 */
+export interface UsageSummary {
+	contextTokens: number | null;
+	contextWindow: number;
+	contextPercent: number | null;
+	cost: number;
+	inputTokens: number;
+	outputTokens: number;
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
+	model: string;
+}
+
 export interface PreviewMeta {
 	sessionId: string;
 	sessionFile: string;
@@ -18,6 +31,8 @@ export interface PreviewMeta {
 	shownItems: number;
 	/** 会话名称（用户通过 /name 设置过才有） */
 	sessionName?: string;
+	/** 上下文用量与累计花费 */
+	usage?: UsageSummary;
 }
 
 /** 消息 content（string 或多模态数组）→ 纯文本 */
