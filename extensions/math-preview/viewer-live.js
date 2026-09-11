@@ -55,6 +55,13 @@
 				P.setMeta(msg.meta || {});
 				P.updateHeader();
 				break;
+			case "reset":
+				// 会话切换 / fork / 切分支 / 压缩：内容整体换成当前分支
+				P.setItems(msg.items || []);
+				P.setMeta(msg.meta || {});
+				P.renderAll();
+				setStatus("内容已刷新（" + (msg.reason || "reset") + "）");
+				break;
 			case "append":
 				P.appendItem(msg.item);
 				break;

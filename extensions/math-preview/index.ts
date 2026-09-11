@@ -11,6 +11,9 @@
  * - /live status             查看地址 / 连接数 / 输入状态
  *
  * 环境变量：PI_PREVIEW_NO_OPEN=1 时不自动打开浏览器（只输出地址）
+ *
+ * 会话切换（/new、/resume、/fork、/clone）、分支切换（/tree）、压缩（/compact）时，
+ * 实时服务会保留，并把页面内容整体重载为当前分支（reset 事件）。
  */
 import { execFile } from "node:child_process";
 import { cp, mkdir, stat, writeFile } from "node:fs/promises";
@@ -123,7 +126,7 @@ function sessionNameOf(ctx: any): string {
 	}
 }
 
-/** 同一秒重复触发时避免覆盖：追加 -1、-2 … */
+/** 保证页面文件名唯一：同一秒重复触发时追加 -1、-2 … */
 async function uniquePagePath(base: string): Promise<string> {
 	let path = join(OUT_DIR, `${base}.html`);
 	let i = 1;
@@ -154,157 +157,226 @@ function parseArgs(args: string): { rounds: number; keep: number } {
 	return { rounds, keep };
 }
 
+/**
+ * 实时服务的状态放在 globalThis 上：
+ * 会话切换（/new、/resume、/fork）时 pi 会销毁并重建扩展实例，
+ * 状态放在实例里会丢，服务也就随之失联。放全局后服务可以跨会话存活。
+ */
+interface LiveState {
+	handle: LiveServerHandle | null;
+	inputEnabled: boolean;
+	items: any[];
+	openIndex: number | null;
+	indexByMessage: WeakMap<object, number>;
+	pendingUpdate: { index: number; item: any } | null;
+	flushTimer: ReturnType<typeof setTimeout> | null;
+	/** 最近一次会话上下文（页面刷新时生成 HTML / 快照用） */
+	getContext: (() => { sessionId: string; sessionName: string; cwd: string }) | null;
+}
+
+const STATE_KEY = "__piLivePreviewState";
+
+function liveState(): LiveState {
+	const g = globalThis as any;
+	if (!g[STATE_KEY]) {
+		g[STATE_KEY] = {
+			handle: null,
+			inputEnabled: false,
+			items: [],
+			openIndex: null,
+			indexByMessage: new WeakMap(),
+			pendingUpdate: null,
+			flushTimer: null,
+			getContext: null,
+		} satisfies LiveState;
+	}
+	return g[STATE_KEY] as LiveState;
+}
+
+/** 用给定 ctx 重建页面内容并让前端整体重载（会话/分支变化时用） */
+function reloadForContext(ctx: any, reason: string): void {
+	const S = liveState();
+	if (!S.handle) return;
+	S.items = buildItems(ctx?.sessionManager?.getBranch?.() ?? []);
+	S.openIndex = null;
+	S.indexByMessage = new WeakMap();
+	S.pendingUpdate = null;
+	S.getContext = () => ({ sessionId: sessionShortId(ctx), sessionName: sessionNameOf(ctx), cwd: ctx?.cwd ?? "" });
+	S.handle.broadcast({
+		type: "reset",
+		reason,
+		items: S.items,
+		meta: {
+			...S.getContext(),
+			generatedAt: new Date().toLocaleString(),
+			totalItems: S.items.length,
+		},
+	});
+}
+
 export default function mathPreview(pi: ExtensionAPI) {
-	// ---------- 实时服务状态（仅 /live 之后才存在） ----------
-	let live: LiveServerHandle | null = null;
-	let liveItems: any[] = [];
-	let inputEnabled = false;
-	let openIndex: number | null = null;
-	let flushTimer: ReturnType<typeof setTimeout> | null = null;
-	let pendingUpdate: { index: number; item: any } | null = null;
-	const indexByMessage = new WeakMap<object, number>();
+	const S = liveState();
 
 	function flushPending(): void {
-		flushTimer = null;
-		if (!pendingUpdate || !live) {
-			pendingUpdate = null;
+		S.flushTimer = null;
+		if (!S.pendingUpdate || !S.handle) {
+			S.pendingUpdate = null;
 			return;
 		}
-		const { index, item } = pendingUpdate;
-		pendingUpdate = null;
-		liveItems[index] = item;
-		live.broadcast({ type: "update", index, item });
+		const { index, item } = S.pendingUpdate;
+		S.pendingUpdate = null;
+		S.items[index] = item;
+		S.handle.broadcast({ type: "update", index, item });
 	}
 
 	/** 流式更新节流：避免每个 token 都重渲染一次 */
 	function scheduleUpdate(index: number, item: any): void {
-		pendingUpdate = { index, item };
-		if (flushTimer) return;
-		flushTimer = setTimeout(flushPending, 120);
-		flushTimer.unref?.();
+		S.pendingUpdate = { index, item };
+		if (S.flushTimer) return;
+		S.flushTimer = setTimeout(flushPending, 120);
+		S.flushTimer.unref?.();
 	}
 
 	function resolveIndex(message: any): number | undefined {
-		const mapped = indexByMessage.get(message);
+		const mapped = S.indexByMessage.get(message);
 		if (mapped !== undefined) return mapped;
-		return openIndex ?? undefined;
+		return S.openIndex ?? undefined;
 	}
 
 	pi.on("message_start", (event) => {
-		if (!live) return;
+		if (!S.handle) return;
 		const message: any = (event as any).message;
 		const item = messageToItem(message);
 		if (!item) return;
-		const index = liveItems.length;
-		liveItems.push(item);
-		indexByMessage.set(message, index);
-		openIndex = index;
-		live.broadcast({ type: "append", item });
+		const index = S.items.length;
+		S.items.push(item);
+		S.indexByMessage.set(message, index);
+		S.openIndex = index;
+		S.handle.broadcast({ type: "append", item });
 	});
 
 	pi.on("message_update", (event) => {
-		if (!live) return;
+		if (!S.handle) return;
 		const message: any = (event as any).message;
 		const item = messageToItem(message);
 		if (!item) return;
 		const index = resolveIndex(message);
 		if (index === undefined) {
-			const next = liveItems.length;
-			liveItems.push(item);
-			indexByMessage.set(message, next);
-			openIndex = next;
-			live.broadcast({ type: "append", item });
+			const next = S.items.length;
+			S.items.push(item);
+			S.indexByMessage.set(message, next);
+			S.openIndex = next;
+			S.handle.broadcast({ type: "append", item });
 			return;
 		}
-		indexByMessage.set(message, index);
+		S.indexByMessage.set(message, index);
 		scheduleUpdate(index, item);
 	});
 
 	pi.on("message_end", (event) => {
-		if (!live) return;
+		if (!S.handle) return;
 		const message: any = (event as any).message;
 		const item = messageToItem(message);
 		if (!item) return;
 		const index = resolveIndex(message);
 		if (index === undefined) {
-			const next = liveItems.length;
-			liveItems.push(item);
-			indexByMessage.set(message, next);
-			live.broadcast({ type: "append", item });
+			const next = S.items.length;
+			S.items.push(item);
+			S.indexByMessage.set(message, next);
+			S.handle.broadcast({ type: "append", item });
 			return;
 		}
-		liveItems[index] = item;
-		live.broadcast({ type: "update", index, item });
-		if (openIndex === index) openIndex = null;
+		S.items[index] = item;
+		S.handle.broadcast({ type: "update", index, item });
+		if (S.openIndex === index) S.openIndex = null;
 	});
 
 	pi.on("agent_start", () => {
-		live?.broadcast({ type: "status", busy: true });
+		S.handle?.broadcast({ type: "status", busy: true });
 	});
 	pi.on("agent_end", () => {
-		live?.broadcast({ type: "status", busy: false });
+		S.handle?.broadcast({ type: "status", busy: false });
 	});
 	pi.on("agent_settled", () => {
-		live?.broadcast({ type: "status", busy: false });
+		S.handle?.broadcast({ type: "status", busy: false });
 	});
 
-	/** 会话改名（/name）时把最新 meta 推给页面，标签页标题跟着变 */
+	// ---------- 会话 / 分支 / 压缩：让页面整体重载，服务不中断 ----------
+	/** 会话名称变化：只更新 meta，不必重载内容 */
 	pi.on("session_info_changed", (_event, ctx) => {
-		if (!live) return;
-		live.broadcast({
+		if (!S.handle) return;
+		S.getContext = () => ({ sessionId: sessionShortId(ctx), sessionName: sessionNameOf(ctx), cwd: ctx?.cwd ?? "" });
+		S.handle.broadcast({
 			type: "meta",
-			meta: {
-				sessionId: sessionShortId(ctx),
-				sessionName: sessionNameOf(ctx),
-				cwd: ctx.cwd,
-				generatedAt: new Date().toLocaleString(),
-				totalItems: liveItems.length,
-			},
+			meta: { ...S.getContext(), generatedAt: new Date().toLocaleString(), totalItems: S.items.length },
 		});
 	});
 
-	pi.on("session_shutdown", async () => {
-		if (!live) return;
+	/** 新建 / 恢复 / fork 会话：内容整体换成新会话的分支 */
+	pi.on("session_start", (event, ctx) => {
+		if (!S.handle) return;
+		const reason = (event as any)?.reason ?? "startup";
+		reloadForContext(ctx, `session:${reason}`);
+	});
+
+	/** /tree 切换分支：同一会话内换分支 */
+	pi.on("session_tree", (_event, ctx) => {
+		reloadForContext(ctx, "tree");
+	});
+
+	/** /compact 压缩：条目结构变了，重建一次最省事 */
+	pi.on("session_compact", (_event, ctx) => {
+		reloadForContext(ctx, "compact");
+	});
+
+	/** 退出时关掉服务；会话切换（new/resume/fork/reload）时保留，等 session_start 重绑 */
+	pi.on("session_shutdown", async (event) => {
+		if (!S.handle) return;
+		const reason = (event as any)?.reason ?? "quit";
+		if (reason !== "quit") return;
 		try {
-			await live.close();
+			await S.handle.close();
 		} catch {
 			/* 忽略 */
 		}
-		live = null;
-		inputEnabled = false;
+		S.handle = null;
+		S.inputEnabled = false;
+		S.items = [];
+		S.getContext = null;
 	});
 
 	async function ensureLive(ctx: ExtensionCommandContext): Promise<LiveServerHandle> {
-		if (live) return live;
+		if (S.handle) {
+			S.getContext = () => ({ sessionId: sessionShortId(ctx), sessionName: sessionNameOf(ctx), cwd: ctx.cwd ?? "" });
+			return S.handle;
+		}
 		await mkdir(OUT_DIR, { recursive: true });
 		await ensureAssets();
-		liveItems = buildItems(ctx.sessionManager.getBranch());
-		openIndex = null;
+		S.items = buildItems(ctx.sessionManager.getBranch());
+		S.openIndex = null;
+		S.indexByMessage = new WeakMap();
+		S.getContext = () => ({ sessionId: sessionShortId(ctx), sessionName: sessionNameOf(ctx), cwd: ctx.cwd ?? "" });
 		const handle = await startLiveServer({
 			assetsDir: ASSETS_DIR,
-			pageHtml: () =>
-				buildLiveHtml({
-					sessionId: sessionShortId(ctx),
-					sessionName: sessionNameOf(ctx),
-					cwd: ctx.cwd,
-				}),
+			pageHtml: () => {
+				const c = S.getContext?.() ?? { sessionId: "unknown", sessionName: "", cwd: "" };
+				return buildLiveHtml({ sessionId: c.sessionId, sessionName: c.sessionName, cwd: c.cwd });
+			},
 			getSnapshot: () => ({
-				items: liveItems,
+				items: S.items,
 				meta: {
-					sessionId: sessionShortId(ctx),
-					sessionName: sessionNameOf(ctx),
-					cwd: ctx.cwd,
+					...(S.getContext?.() ?? { sessionId: "unknown", sessionName: "", cwd: "" }),
 					generatedAt: new Date().toLocaleString(),
-					totalItems: liveItems.length,
+					totalItems: S.items.length,
 				},
 			}),
-			isInputEnabled: () => inputEnabled,
+			isInputEnabled: () => S.inputEnabled,
 			onPrompt: async (text) => {
 				pi.sendUserMessage(text);
 			},
 			onLog: (message) => ctx.ui.notify(message, "warn"),
 		});
-		live = handle;
+		S.handle = handle;
 		return handle;
 	}
 
@@ -326,30 +398,30 @@ export default function mathPreview(pi: ExtensionAPI) {
 			const sub = (String(args ?? "").trim().toLowerCase().split(/\s+/)[0] ?? "").trim();
 			try {
 				if (sub === "off" || sub === "stop" || sub === "close") {
-					if (!live) {
+					if (!S.handle) {
 						ctx.ui.notify("实时服务未运行", "info");
 						return;
 					}
-					const port = live.port;
-					await live.close();
-					live = null;
-					inputEnabled = false;
+					const port = S.handle.port;
+					await S.handle.close();
+					S.handle = null;
+					S.inputEnabled = false;
 					ctx.ui.notify(`实时服务已停止（端口 ${port} 已释放），页面输入同时锁定`, "info");
 					return;
 				}
 				if (sub === "lock") {
-					inputEnabled = false;
-					live?.broadcast({ type: "input", enabled: false });
+					S.inputEnabled = false;
+					S.handle?.broadcast({ type: "input", enabled: false });
 					ctx.ui.notify("页面输入已锁定", "info");
 					return;
 				}
 				if (sub === "status") {
-					if (!live) {
+					if (!S.handle) {
 						ctx.ui.notify("实时服务未运行（/live 启动）", "info");
 						return;
 					}
 					ctx.ui.notify(
-						`实时服务：${live.url}\n连接数：${live.clientCount()}｜输入：${inputEnabled ? "已解锁" : "已锁定"}`,
+						`实时服务：${S.handle.url}\n连接数：${S.handle.clientCount()}｜输入：${S.inputEnabled ? "已解锁" : "已锁定"}`,
 						"info",
 					);
 					return;
@@ -362,10 +434,10 @@ export default function mathPreview(pi: ExtensionAPI) {
 					return;
 				}
 
-				const wasRunning = !!live;
+				const wasRunning = !!S.handle;
 				const handle = await ensureLive(ctx);
 				if (sub === "input" || sub === "unlock") {
-					inputEnabled = true;
+					S.inputEnabled = true;
 					handle.broadcast({ type: "input", enabled: true });
 					ctx.ui.notify(
 						`页面输入已解锁（仅本次会话有效，/live lock 可重新锁定）\n地址：${handle.url}`,
