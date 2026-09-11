@@ -20,12 +20,10 @@
 		}
 	}
 
-	var markedFn =
-		typeof marked === "function"
-			? marked
-			: marked && typeof marked.parse === "function"
-				? marked.parse.bind(marked)
-				: null;
+	// marked 缺失（资源未加载 / 页面被移位）时用 typeof 保护，降级为纯文本而不是直接崩溃
+	var markedFn = null;
+	if (typeof marked === "function") markedFn = marked;
+	else if (typeof marked === "object" && marked && typeof marked.parse === "function") markedFn = marked.parse.bind(marked);
 
 	/** 由 setupSidebarToggle 赋值，供拖拽自动收起复用 */
 	var setCollapsed = function () {};
@@ -61,19 +59,40 @@
 		// \s \d \w \n … 后面不再跟字母 → 是 JS 正则/字符串转义；若是 \sum \sqrt \nabla 等 LaTeX 命令则放行
 		if (/\\[dswntrDSWNTRbB](?![a-zA-Z])/.test(t)) return false;
 		if (/\(\?|\*\/|\/\/|=>|\[\^/.test(t)) return false;
+		// 中文且没有 \text 类命令 → 不是数学
 		if (/[\u4e00-\u9fff]/.test(t) && !/\\(text|mathrm|mbox|operatorname|textbf|textit|mathbf)\b/.test(t)) return false;
-		if (/\\[a-zA-Z]+/.test(t)) return true;
+		// 命令行 / 路径 / 文件名特征：shell 变量对、引号、扩展名、URL、${...}
+		// 注意不能把 | 算进来：数学里 | 是取值/绝对值符号（如 \left.\dfrac{...}\right|{r=0}）
+		if (/[;"'`]/.test(t)) return false;
+		if (/\\/.test(t) && !/\\[a-zA-Z]/.test(t)) return false;
+		if (/\.(xlsx?|csv|py|js|ts|json|txt|md|html?|exe|sh|bat|log|png|jpe?g|gif|pdf|zip)\b/i.test(t)) return false;
+		if (/:\/\//.test(t) || /\$\{/.test(t)) return false;
+		// 明确的数学信号
+		if (/\\[a-zA-Z]+/.test(t)) return true; // \frac \sum \alpha …
 		if (/[≤≥≠≈∑∫√∞±×÷→←∈∀∃∂∇]/.test(t)) return true;
 		if (/[=+\-*/^_{}<>|]/.test(t) && /[0-9a-zA-Z]/.test(t)) return true;
+		// 简单数学表达式：单个变量、下标、函数调用、参数列表（如 C、T_0、f(x)、(r,z)、r,z）
+		// 字符集刻意排除 / \ : 等路径字符，避免把 $TEMP/x$ 这类当成公式
+		if (/^[a-zA-Z0-9(\[{][a-zA-Z0-9\s,^_(){}[\].+\-*]*$/.test(t) && /[a-zA-Z]/.test(t)) return true;
 		return false;
 	}
 
-	/** 代码高亮（失败则回退纯转义） */
+	/** 代码高亮（指定语言 → 自动识别 → 纯转义） */
 	function highlightCode(code, lang) {
+		if (typeof hljs === "undefined") return esc(code);
 		var l = String(lang || "").trim().toLowerCase();
-		if (l && typeof hljs !== "undefined" && hljs.getLanguage && hljs.getLanguage(l)) {
+		if (l && hljs.getLanguage && hljs.getLanguage(l)) {
 			try {
 				return hljs.highlight(code, { language: l }).value;
+			} catch (e) {
+				/* 回退 */
+			}
+		}
+		// 代码块没标语言时自动识别（限长，避免大段文本卡顿）
+		if (!l && hljs.highlightAuto && code.length <= 20000 && code.split("\n").length <= 400) {
+			try {
+				var auto = hljs.highlightAuto(code);
+				if (auto && typeof auto.value === "string") return auto.value;
 			} catch (e) {
 				/* 回退 */
 			}
