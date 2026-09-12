@@ -113,17 +113,22 @@ export function pickTranslatorModel(registry: any, config: TranslateConfig): any
 	return textModels.slice().sort((a, b) => price(a) - price(b))[0];
 }
 
-/** 翻译提示词：忠实原意优先，没把握的词保留原样 */
+/**
+ * 翻译提示词。
+ * 关键：输入是原始 Markdown 源码，要求模型保持结构、不Translate代码与公式。
+ */
 export function buildTranslatePrompt(text: string, targetLang: string): string {
 	return [
-		`把下面的内容翻译成${targetLang}。要求：`,
-		"1. 只输出译文，不要解释、不要加引号或代码块包裹；",
-		"2. 忠实原意，不增删、不总结、不润色；",
-		"3. 数学公式、代码、标识符、专有名词、文件名保持原样；",
-		"4. 遇到没有把握的词，直接保留原词（必要时加括号），不要猜着意译；",
-		"5. 保持原文的段落与列表结构。",
+		`把下面的 Markdown 内容翻译成${targetLang}。要求：`,
+		"1. 只输出译文，不要解释、不要加引号或代码块包裹整段结果；",
+		"2. 保持 Markdown 结构：标题、列表、引用、分隔线、**表格（继续用 Markdown 表格语法，行列对齐）**都原样保留结构；",
+		"3. 代码块（``` 围起来的部分）及其内部内容一律原样照抄，绝对不要翻译代码、命令、路径、变量名、报错信息；",
+		"4. 数学公式（$...$、$$...$$、\\[...\\]）原样保留；",
+		"5. 行内代码（`...`）内容原样保留；",
+		"6. 忠实原意，不增删、不总结、不润色；",
+		"7. 遇到没有把握的词直接保留原词（必要时加括号），不要猜着意译。",
 		"",
-		"原文：",
+		"原文（Markdown）：",
 		text,
 	].join("\n");
 }

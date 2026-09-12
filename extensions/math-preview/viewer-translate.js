@@ -22,7 +22,19 @@
 		});
 	}
 
-	/** 译文按纯文本渲染（只保留换行），不做 Markdown/HTML，避免模型输出注入页面 */
+	/** 译文渲染：复用页面的 Markdown 渲染（会转义 HTML，且能正确地画出表格/代码块/公式） */
+	function renderMarkdownSafe(text) {
+		if (typeof P.renderMarkdown === "function") {
+			try {
+				return P.renderMarkdown(text);
+			} catch (e) {
+				/* 回退到纯文本 */
+			}
+		}
+		return renderTranslated(text);
+	}
+
+	/** 流式过程中先用纯文本（半成品表格会闪），完成后才走 Markdown 渲染 */
 	function renderTranslated(text) {
 		return esc(text).replace(/\n/g, "<br>");
 	}
@@ -111,22 +123,31 @@
 	}
 
 	// ---------- 采集可翻译块 ----------
+	/**
+	 * 采集可翻译块：DOM 元素 + 对应的【原始 Markdown】。
+	 * 必须用源文本而不是 innerText —— 否则表格会被压成散行、代码块也会丢结构。
+	 * renderAll/appendItem 保证 #content 的子元素与 items 一一对应。
+	 */
 	function collectBlocks() {
 		var out = [];
-		var items = document.querySelectorAll("#content .item");
-		Array.prototype.forEach.call(items, function (item) {
-			var thinking = item.querySelector(".thinking-body");
-			if (thinking) out.push(thinking);
-			var body = item.querySelector(":scope > .md");
-			if (body) out.push(body);
-		});
-		return out
-			.map(function (el) {
-				return { el: el, text: String(el.innerText || el.textContent || "").trim() };
-			})
-			.filter(function (b) {
-				return b.text.length >= 2;
-			});
+		var content = document.getElementById("content");
+		if (!content || typeof P.getItems !== "function") return out;
+		var items = P.getItems() || [];
+		var domItems = content.children;
+		for (var i = 0; i < domItems.length && i < items.length; i++) {
+			var el = domItems[i];
+			var it = items[i] || {};
+			if (!el || typeof el.querySelector !== "function") continue;
+			var thinkingEl = el.querySelector(".thinking-body");
+			if (thinkingEl && typeof it.thinking === "string" && it.thinking.trim()) {
+				out.push({ el: thinkingEl, md: it.thinking, kind: "thinking" });
+			}
+			var bodyEl = el.querySelector(":scope > .md");
+			if (bodyEl && typeof it.text === "string" && it.text.trim()) {
+				out.push({ el: bodyEl, md: it.text, kind: "text" });
+			}
+		}
+		return out;
 	}
 
 	function instrument() {
@@ -138,7 +159,7 @@
 			btn.type = "button";
 			btn.className = "pi-translate-btn";
 			btn.textContent = "译";
-			btn.title = IS_LIVE ? "翻译这一段（" + LANG + "）" : "翻译需要先在 pi 里执行 /live";
+			btn.title = IS_LIVE ? "翻译这一段（" + LANG + "，保留表格/代码块结构）" : "翻译需要先在 pi 里执行 /live";
 			btn.addEventListener("click", function (e) {
 				e.preventDefault();
 				e.stopPropagation();
@@ -150,12 +171,12 @@
 
 	// ---------- 发起翻译 ----------
 	function requestTranslate(block, btn) {
-		var text = block.text;
-		if (!text) return;
-		var key = cacheKey(text);
+		var source = String(block.md || "").trim(); // 原始 Markdown
+		if (!source) return;
+		var key = cacheKey(source);
 		var cached = readCache(key);
 		if (cached) {
-			openOverlay("译文（缓存）", renderTranslated(cached));
+			openOverlay("译文（缓存）", renderMarkdownSafe(cached));
 			btn.textContent = "已译";
 			btn.classList.add("done");
 			return;
@@ -165,14 +186,14 @@
 			return;
 		}
 		var blockId = block.el.dataset.piBlock;
-		current = { blockId: blockId, btn: btn, block: block, text: text, out: "" };
+		current = { blockId: blockId, btn: btn, block: block, source: source, out: "" };
 		btn.disabled = true;
 		btn.textContent = "译…";
 		openOverlay("译文（生成中…）", "");
 		fetch("/translate?token=" + encodeURIComponent(TOKEN), {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ blockId: blockId, text: text, targetLang: LANG }),
+			body: JSON.stringify({ blockId: blockId, text: source, targetLang: LANG }),
 		})
 			.then(function (r) {
 				return r.text().then(function (body) {
@@ -224,8 +245,9 @@
 				appendDelta(msg.delta || "");
 			} else if (msg.type === "translate-done") {
 				current.out = msg.text || current.out;
-				openOverlay("译文" + (msg.ms ? "（" + (msg.ms / 1000).toFixed(1) + "s）" : ""), renderTranslated(current.out));
-				writeCache(cacheKey(current.text), current.out);
+				// 完成后按 Markdown 渲染：表格、代码块、公式都能正确显示
+				openOverlay("译文" + (msg.ms ? "（" + (msg.ms / 1000).toFixed(1) + "s）" : ""), renderMarkdownSafe(current.out));
+				writeCache(cacheKey(current.source), current.out);
 				if (current.btn) {
 					current.btn.disabled = false;
 					current.btn.textContent = "已译";

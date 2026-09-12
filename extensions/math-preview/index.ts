@@ -592,7 +592,7 @@ export default function mathPreview(pi: ExtensionAPI) {
 			onPrompt: async (text) => {
 				pi.sendUserMessage(text);
 			},
-			onLog: (message) => ctx.ui.notify(message, "warn"),
+			onLog: (message) => ctx.ui.notify(message, "warning"),
 			extraRoutes: (req, res, url) => S.extraRoutesImpl?.(req, res, url) ?? false,
 		});
 		S.handle = handle;
