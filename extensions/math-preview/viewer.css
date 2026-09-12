@@ -228,17 +228,29 @@ body.side-collapsed #content { padding-left: 58px; }
 	padding: 10px 16px;
 	margin: 14px 0;
 	scroll-margin-top: 16px;
-	/* 离屏卡片跳过布局与绘制，降低重排开销。
-	   ⚠ 估值必须接近真实高度：它曾用 200px（含盒模型 232px/条），
-	   而实测真实平均只有 155px/条（内容盒约 103px），且长回复可达 3000px。
-	   估值虚高会让元素一进视口就“矮一大截”，叠加 scroll anchoring 就会
-	   不断修正滚动位置（表现为“向上翻被拉回”）。 */
+	/* 离屏卡片跳过布局与绘制（分片模式下让 done 从 6.5s 回到 2.4s）。
+	   ⚠ 它是“滚动时画面被推走”的元凶：离屏卡片永远按估值占位，
+	   一进视口就变尺寸（长回复从 179px 变到 3000px）。不做分片也一样，
+	   实测一次性渲染仍有 ~1800px 累积漂移；用户说的“先快速扫过全页再滚
+	   就不跳”正好印证（扫过后所有卡片都记住了真实尺寸）。
+	   想完全消除漂移就用 localStorage 关掉分片（见 viewer.js 的 PROGRESSIVE），
+	   那时会一起禁用 cv（body.no-progressive）。 */
 	content-visibility: auto;
 	contain-intrinsic-size: auto 127px;
 }
-/* 分片渲染的占位骨架：保留 .item 的盒模型与 intrinsic 尺寸，只把底色与边框透明，
-   避免分片期间闪现一片“空卡片” */
-.item-skeleton { background: transparent; border-color: transparent; }
+/* 关闭分片（对比/偏好用）时同时禁用 cv：让所有卡片在渲染时就真实布局，
+   尺寸从此不再变，滚动完全不漂移 */
+body.no-progressive .item {
+	content-visibility: visible;
+	contain-intrinsic-size: none;
+}
+/* 分片渲染的占位骨架：保留 .item 的盒模型，底色/边框透明，
+   高度用实测平均估值撑开文档（box-sizing:border-box，已含 padding+border） */
+.item-skeleton {
+	background: transparent;
+	border-color: transparent;
+	height: 127px;
+}
 .item > header {
 	display: flex;
 	align-items: baseline;

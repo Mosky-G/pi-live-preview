@@ -554,6 +554,37 @@
 	// 目的：先出首屏，剩余条目在后台 idle 分批填充，避免一次构造 970 条把主线程占满。
 	// 骨架已保证总高度 / #item-N 锚点立即存在，所以分片过程不改变文档高度。
 	var CHUNK_FIRST_MIN = 30; // 首屏至少这么多条
+	/**
+	 * 分片渲染开关（默认开）。
+	 * 想对比"一次性渲染"的滚动体验，可在页面 Console 执行
+	 *   localStorage.setItem("pi-preview-no-progressive", "1")
+	 * 再刷新。一次性渲染首屏约 1s（主线程会卡一下），但之后所有卡片尺寸
+	 * 都已确定，滚动时不会再因为填充而移动画面。
+	 */
+	var PROGRESSIVE = true;
+	try {
+		PROGRESSIVE = localStorage.getItem("pi-preview-no-progressive") !== "1";
+	} catch (e) {
+		/* file:// 下 localStorage 可能不可用 */
+	}
+	// 关闭分片时必须同时禁用 content-visibility：否则离屏卡片仍按估值占位，
+	// 滚动时一进视口就变尺寸，画面依旧会漂移（实测这样做才拿到 0 漂移）
+	if (!PROGRESSIVE) {
+		try {
+			document.body.classList.add("no-progressive");
+		} catch (e) {
+			/* 忽略 */
+		}
+	}
+
+	/** 铺一层不可见骨架（保证总高度 / #item-N 锚点 / 侧栏跳转立即可用） */
+	function buildSkeleton(content) {
+		var sk = [];
+		for (var i = 0; i < items.length; i++) {
+			sk.push('<div class="item item-skeleton" id="item-' + i + '" data-idx="' + i + '"></div>');
+		}
+		content.innerHTML = sk.join("\n");
+	}
 	var FIRST_SCREEN_RATIO = 1.5; // 或覆盖约 1.5 屏
 	var FIRST_BUDGET_MS = 80; // 首屏硬预算
 	var CHUNK_SIZE = 12; // 每批条数上限（实测单条约 1ms）
@@ -828,12 +859,24 @@
 		// 内容整体换掉后，滚动基准同步一次（用户若在底部，下一次 onScroll 会修正 followBottom）
 		lastScrollY = window.scrollY;
 
-		// 1) 占位骨架：总高度 / #item-N 锚点 / 侧栏跳转立即可用（不可见，见 .item-skeleton）
-		var skeleton = [];
-		for (var i = 0; i < items.length; i++) {
-			skeleton.push('<div class="item item-skeleton" id="item-' + i + '" data-idx="' + i + '"></div>');
+		// 0) 一次性渲染模式（对比用）：不分片，全同步渲染完
+		if (!PROGRESSIVE) {
+			buildSkeleton(content);
+			for (var k = 0; k < items.length; k++) fillItem(k);
+			mark("first");
+			updateHeader();
+			buildSidebar();
+			mark("sidebar");
+			trackActive();
+			PERF.items = items.length;
+			mark("total");
+			mark("done");
+			applyHashAnchor();
+			return;
 		}
-		content.innerHTML = skeleton.join("\n");
+
+		// 1) 占位骨架：总高度 / #item-N 锚点 / 侧栏跳转立即可用（不可见，见 .item-skeleton）
+		buildSkeleton(content);
 		mark("skeleton");
 
 		// 2) 首屏：至少 CHUNK_FIRST_MIN 条；再按「已填充区累计高度覆盖约 1.5 屏」补足
