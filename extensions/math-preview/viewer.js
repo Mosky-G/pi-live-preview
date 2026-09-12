@@ -31,6 +31,25 @@
 	/** 静态页标题带后缀，与实时页区分 */
 	var TITLE_SUFFIX = LIVE ? "" : " · 快照";
 
+	// 分阶段耗时打点（Step 0 起用于分片渲染的对比基线）。
+	// ⚠ headless 的 --virtual-time-budget 下 performance.now() 不推进，
+	//   读数必须用真实时钟（见临时测试脚本的最小 CDP 客户端）。
+	var PERF = (window.__perf = {
+		mode: LIVE ? "live" : "static",
+		items: items.length,
+		marks: {},
+		chunks: 0,
+		maxChunkMs: 0,
+		/** genMs 的内部归因（累计值，单位 ms） */
+		attr: { markedMs: 0, hljsMs: 0 },
+	});
+	function perfNow() {
+		return (window.performance && performance.now && performance.now()) || 0;
+	}
+	function mark(name) {
+		PERF.marks[name] = Math.round((perfNow() - BOOT) * 10) / 10;
+	}
+
 	function esc(s) {
 		return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
 			return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
@@ -217,12 +236,16 @@
 		// 正文里的 HTML 标签不能当真实标签（否则 <script> 之类会吞掉页面后续内容），统一转义
 		s = s.replace(/<(?=[a-zA-Z!/])/g, "&lt;");
 
+		var tMarked = perfNow();
 		var html = markedFn ? markedFn(s, { gfm: true, breaks: true }) : "<pre>" + esc(s) + "</pre>";
+		PERF.attr.markedMs += perfNow() - tMarked;
 
+		var tHljs = perfNow();
 		html = html.replace(new RegExp(uid + "CODEBLOCK(\\d+)@@", "g"), function (_m, i) {
 			var v = codes[+i];
 			return v === undefined ? "" : highlightCode(v, codeLangs[+i]);
 		});
+		PERF.attr.hljsMs += perfNow() - tHljs;
 		html = html.replace(new RegExp(uid + "INLINECODE(\\d+)@@", "g"), function (_m, i) {
 			var v = inlines[+i];
 			return v === undefined ? "" : "<code>" + esc(v) + "</code>";
@@ -471,7 +494,11 @@
 	function renderAll() {
 		var content = document.getElementById("content");
 		if (!content) return;
-		content.innerHTML = items.map(htmlFor).join("\n");
+		mark("start");
+		var htmlString = items.map(htmlFor).join("\n");
+		mark("gen");
+		content.innerHTML = htmlString;
+		mark("html");
 		content.querySelectorAll("a[href]").forEach(function (a) {
 			var href = a.getAttribute("href") || "";
 			if (href.charAt(0) !== "#") {
@@ -480,9 +507,13 @@
 			}
 		});
 		renderMath(content);
+		mark("math");
 		updateHeader();
 		buildSidebar();
+		mark("sidebar");
 		trackActive();
+		mark("total");
+		PERF.items = items.length;
 	}
 
 	function appendItem(item) {
@@ -649,6 +680,8 @@
 					highlighted: content ? content.querySelectorAll("pre code span").length : 0,
 					errors: window.__mathErrors || [],
 					renderMs: Math.round((((window.performance && performance.now && performance.now()) || 0) - BOOT) * 10) / 10,
+					/** 分阶段打点：headless 虚拟时间下不可用，需用真实时钟读 */
+					perf: PERF.marks,
 				},
 				extra || {},
 			),
