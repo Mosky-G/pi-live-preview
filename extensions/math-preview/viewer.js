@@ -239,6 +239,12 @@
 				? '<div class="math-display" data-tex="' + esc(it.tex) + '"></div>'
 				: '<span class="math-inline" data-tex="' + esc(it.tex) + '"></span>';
 		});
+		// 表格套一层横向滚动容器：单元格里有长 inline code 这类不可断词内容时，
+		// 表格 min-content 会超过正文列宽。不直接给 table 加 overflow（那会把 table
+		// 变成 block，旧版 Firefox 会丢失 table 语义），而由外层 wrapper 承担滚动。
+		html = html
+			.replace(/<table>/g, '<div class="md-table-wrap"><table>')
+			.replace(/<\/table>/g, "</table></div>");
 		return html;
 	}
 
