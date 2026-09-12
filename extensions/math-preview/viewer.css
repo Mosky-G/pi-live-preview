@@ -426,18 +426,14 @@ body.live-resizing { user-select: none; cursor: row-resize; }
 .live-status.err { color: var(--accent-error); }
 
 @media (max-width: 860px) {
-	#shell { flex-direction: column; }
-	#sidebar { width: auto; align-self: stretch; }
-	#side-resizer { display: none; }
-	#sidebar {
-		position: static;
-		height: auto;
-		max-height: 34vh;
-		border-right: none;
-		border-bottom: 1px solid var(--side-line);
-	}
+	/* 窄屏**仍然保持左侧竖栏**。早期版本在这里把它改成顶部横栏
+	   （#shell 转 column + #sidebar 转 static/max-height:34vh），结果看起来像
+	   “侧栏消失”且开关按钮悬在原位；那不是想要的设计，已移除。
+	   这里只收紧侧栏宽度上限与正文内边距。 */
+	#sidebar { width: min(var(--side-w), 42vw); }
+	/* 按钮的 left 必须跟着侧栏宽度上限走，否则窄屏会骑出侧栏右缘 */
+	#side-toggle { left: calc(min(var(--side-w), 42vw) - 32px); }
 	body.side-collapsed #sidebar { display: none; }
 	body.side-collapsed #content { padding-left: 14px; }
 	#content { padding: 14px 14px 120px; }
-	#live-bar { padding: 8px 12px 12px; }
 }

@@ -487,12 +487,32 @@
 		});
 	}
 
-	function isNearBottom() {
-		return window.innerHeight + window.scrollY >= (document.body.scrollHeight || 0) - 140;
+	/**
+	 * 是否跟随底部：粘性状态，由“用户是否主动向上滚”决定。
+	 * 不能用 isNearBottom() 每次重算：用户在距底部 140px 内向上滚时仍会被判为
+	 * “在底部”，于是流式 update / append 会把他反复拉回去（表现为“滚不上去”）。
+	 * 分片渲染把主线程交还得更早，这个旧行为才变得容易撞上。
+	 */
+	var followBottom = false;
+	var lastScrollY = 0;
+
+	function bottomGap() {
+		return (document.body.scrollHeight || 0) - (window.innerHeight + window.scrollY);
 	}
+
+	function onScroll() {
+		var y = window.scrollY;
+		// 向上移 >1px 才算用户主动上滚（避开平滑滚动/锚定修正的抖动）
+		if (y < lastScrollY - 1) followBottom = false;
+		else if (bottomGap() <= 24) followBottom = true; // 滚回底部才重新跟随
+		lastScrollY = y;
+	}
+	window.addEventListener("scroll", onScroll, { passive: true });
 
 	function scrollToBottom() {
 		window.scrollTo(0, document.body.scrollHeight);
+		// 程序滚动也会触发 scroll 事件，先同步基准值，避免被 onScroll 误判成用户上滚
+		lastScrollY = window.scrollY;
 	}
 
 	// ---------- 渲染入口（静态与实时共用） ----------
@@ -623,6 +643,8 @@
 		prog.filled = Object.create(null);
 		PERF.chunks = 0;
 		PERF.maxChunkMs = 0;
+		// 内容整体换掉后，滚动基准同步一次（用户若在底部，下一次 onScroll 会修正 followBottom）
+		lastScrollY = window.scrollY;
 
 		// 1) 占位骨架：总高度 / #item-N 锚点 / 侧栏跳转立即可用（不可见，见 .item-skeleton）
 		var skeleton = [];
@@ -670,7 +692,7 @@
 		items.push(item);
 		// 标记已填充，避免分片队列回头把新条目再填一次
 		if (prog.filled) prog.filled[idx] = true;
-		var keepBottom = isNearBottom();
+		var keepBottom = followBottom;
 		if (content) {
 			var wrapper = document.createElement("div");
 			wrapper.innerHTML = htmlFor(item, idx);
@@ -695,7 +717,7 @@
 		if (!isFilled(index)) return;
 		var el = document.getElementById("item-" + index);
 		if (!el) return;
-		var keepBottom = isNearBottom();
+		var keepBottom = followBottom;
 		var wrapper = document.createElement("div");
 		wrapper.innerHTML = htmlFor(item, index);
 		var next = wrapper.firstElementChild;
