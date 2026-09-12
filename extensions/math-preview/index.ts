@@ -472,6 +472,12 @@ export default function mathPreview(pi: ExtensionAPI) {
 	pi.on("session_start", (event, ctx) => {
 		if (!S.handle) return;
 		const reason = (event as any)?.reason ?? "startup";
+		// /live input 的提示是“仅本次会话有效”，所以会话重建（new/resume/fork）
+		// 或 /reload 重建实例后，把输入通道锁回，避免提示与实际行为不符。
+		if (reason !== "startup" && S.inputEnabled) {
+			S.inputEnabled = false;
+			S.handle.broadcast({ type: "input", enabled: false });
+		}
 		reloadForContext(ctx, `session:${reason}`);
 	});
 
