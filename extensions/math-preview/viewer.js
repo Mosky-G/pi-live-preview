@@ -506,8 +506,24 @@
 		if (y < lastScrollY - 1) followBottom = false;
 		else if (bottomGap() <= 24) followBottom = true; // 滚回底部才重新跟随
 		lastScrollY = y;
+		prog.lastUserScrollAt = perfNow();
+		// 用户滚到未填充区域时，尽快把视口补上（节流，不进 idle 队列）
+		if (!viewportTimer) {
+			viewportTimer = window.setTimeout(function () {
+				viewportTimer = 0;
+				fillViewportNow();
+			}, 120);
+		}
 	}
 	window.addEventListener("scroll", onScroll, { passive: true });
+
+	// 打印前必须全部就位，否则打出来是半页骨架
+	window.addEventListener("beforeprint", function () {
+		prog.gen++;
+		cancelIdle(prog.handle);
+		prog.handle = 0;
+		for (var i = 0; i < items.length; i++) fillItem(i);
+	});
 
 	function scrollToBottom() {
 		window.scrollTo(0, document.body.scrollHeight);
@@ -537,11 +553,17 @@
 	var CHUNK_SIZE = 12; // 每批条数上限（实测单条约 1ms）
 	var CHUNK_BUDGET_MS = 10; // 每批时间预算（避免 >50ms 长任务）
 	var IDLE_TIMEOUT_MS = 400; // requestIdleCallback 兜底超时
+	var VIEWPORT_BUFFER_ITEMS = 30; // 视口下方要预先多填的条数（约 1.5 屏）
+	var ABOVE_IDLE_MS = 1200; // 用户静止多久后才补齐视口上方
+	var VIEWPORT_FILL_BUDGET_MS = 14; // 滚动时即时补视口的单次预算
+	var viewportTimer = 0;
 	var prog = {
 		gen: 0, // 代际：renderAll 时自增，旧队列看到不匹配就退出
-		ptr: 0, // 下一个待填充下标
+		ptr: 0, // 向下推进游标（始终在视口下方）
+		abovePtr: -1, // 向上补齐游标（-1 = 未启动）
 		handle: 0, // rIC / setTimeout handle
 		filled: null, // 已填充标记
+		lastUserScrollAt: 0,
 	};
 
 	function scheduleIdle(cb) {
@@ -561,6 +583,68 @@
 	}
 	function isFilled(idx) {
 		return !!(prog.filled && prog.filled[idx]);
+	}
+
+	/**
+	 * 二分查找：视口纵坐标 clientY 处对应的条目下标。
+	 * #content 的子元素顺序 == 条目顺序（骨架与已填充元素都占原位），所以可直接二分。
+	 */
+	function idxAtY(clientY) {
+		var content = document.getElementById("content");
+		if (!content || !content.children.length) return 0;
+		var kids = content.children;
+		var lo = 0;
+		var hi = kids.length - 1;
+		while (lo < hi) {
+			var mid = (lo + hi) >> 1;
+			if (kids[mid].getBoundingClientRect().bottom < clientY) lo = mid + 1;
+			else hi = mid;
+		}
+		return lo;
+	}
+
+	/** 视口（含下方缓冲）必须在内的条目区间 [top, limit) */
+	function viewportRange() {
+		var vh = window.innerHeight || 800;
+		var top = idxAtY(0);
+		var bottom = idxAtY(vh - 1);
+		return { top: top, bottom: bottom, limit: Math.min(items.length, bottom + VIEWPORT_BUFFER_ITEMS) };
+	}
+
+	/**
+	 * 滚动时立即补视口（节流后调用）：优先保证用户看得到的区域有内容。
+	 */
+	function fillViewportNow() {
+		var r = viewportRange();
+		var t0 = perfNow();
+		for (var i = r.top; i < r.limit; i++) {
+			if (perfNow() - t0 > VIEWPORT_FILL_BUDGET_MS) break;
+			if (!isFilled(i)) fillItem(i);
+		}
+	}
+
+	/** 视口内第一个子元素（用作补偿基准） */
+	function viewportAnchor() {
+		var content = document.getElementById("content");
+		if (!content || !content.children.length) return null;
+		return content.children[idxAtY(0)] || null;
+	}
+
+	/**
+	 * 填充«视口上方»的卡片：必须补偿 scrollY。
+	 * 上方卡片高度一变就会把整个视口内容推走，补偿保证用户正在看的内容不动。
+	 * 只在用户静止时调用（用户正在滚时补偿会表现为“滚不动”）。
+	 */
+	function fillItemAbove(idx) {
+		var anchor = viewportAnchor();
+		var topBefore = anchor ? anchor.getBoundingClientRect().top : 0;
+		fillItem(idx);
+		if (!anchor) return;
+		var delta = anchor.getBoundingClientRect().top - topBefore;
+		if (Math.abs(delta) > 0.5) {
+			window.scrollBy(0, delta);
+			lastScrollY = window.scrollY; // 程序滚动，同步基准值
+		}
 	}
 
 	/**
@@ -603,25 +687,57 @@
 	}
 	window.addEventListener("hashchange", applyHashAnchor);
 
-	/** 后台分批填充：条数与时间双重预算，批间让出主线程 */
+	/**
+	 * 分片填充。关键：**只从视口往下推进，不主动填视口上方**。
+	 * 填上方的卡片会改变上方高度，把整个视口内容推走（长回复可从估值 179px 变到 3000px），
+	 * 用户向上滚动时就表现为“被拉回”。上方只在用户静止 ABOVE_IDLE_MS 后用
+	 * fillItemAbove() 带补偿地补齐（保证 Ctrl+F / 打印完整）。
+	 */
 	function runChunk(gen) {
 		if (gen !== prog.gen) return; // 已被新的 renderAll 作废
 		var t0 = perfNow();
-		var from = prog.ptr;
 		var n = 0;
+		var r = viewportRange();
+
+		// 1) 视口内 + 下方缓冲
+		for (var i = r.top; i < r.limit && n < CHUNK_SIZE && perfNow() - t0 < CHUNK_BUDGET_MS; i++) {
+			if (!isFilled(i)) {
+				fillItem(i);
+				n++;
+			}
+		}
+
+		// 2) 从视口下方继续向下推进（这些卡片在视口下方，填充它们不会推动视口）
+		if (prog.ptr < r.bottom) prog.ptr = r.bottom;
 		while (prog.ptr < items.length && n < CHUNK_SIZE && perfNow() - t0 < CHUNK_BUDGET_MS) {
 			fillItem(prog.ptr++);
 			n++;
 		}
+
+		// 3) 下方满了之后，用户静止时才补齐上方（带补偿）
+		var aboveDone = prog.abovePtr === 0;
+		if (!aboveDone && prog.ptr >= items.length && perfNow() - prog.lastUserScrollAt > ABOVE_IDLE_MS) {
+			if (prog.abovePtr < 0) prog.abovePtr = idxAtY(0);
+			while (prog.abovePtr > 0 && n < CHUNK_SIZE && perfNow() - t0 < CHUNK_BUDGET_MS) {
+				prog.abovePtr--;
+				if (!isFilled(prog.abovePtr)) {
+					fillItemAbove(prog.abovePtr);
+					n++;
+				}
+			}
+			aboveDone = prog.abovePtr <= 0;
+		}
+
 		var dt = perfNow() - t0;
 		PERF.chunks++;
 		if (dt > PERF.maxChunkMs) {
 			PERF.maxChunkMs = Math.round(dt * 10) / 10;
-			// 诊断：哪一段、多少条造成长任务（单条内部无法切分）
-			PERF.slowestChunk = { from: from, to: prog.ptr, items: n, ms: PERF.maxChunkMs };
+			PERF.slowestChunk = { from: r.top, to: r.limit, items: n, ms: PERF.maxChunkMs };
 		}
 		if (gen !== prog.gen) return;
-		if (prog.ptr < items.length) {
+
+		var allDone = prog.ptr >= items.length && aboveDone;
+		if (!allDone) {
 			prog.handle = scheduleIdle(function () {
 				runChunk(gen);
 			});
@@ -640,7 +756,9 @@
 		cancelIdle(prog.handle);
 		prog.handle = 0;
 		prog.ptr = 0;
+		prog.abovePtr = -1;
 		prog.filled = Object.create(null);
+		prog.lastUserScrollAt = perfNow();
 		PERF.chunks = 0;
 		PERF.maxChunkMs = 0;
 		// 内容整体换掉后，滚动基准同步一次（用户若在底部，下一次 onScroll 会修正 followBottom）
@@ -654,15 +772,16 @@
 		content.innerHTML = skeleton.join("\n");
 		mark("skeleton");
 
-		// 2) 首屏：条数下限 / 覆盖约 1.5 屏 / 时间预算，三者取先满足者
+		// 2) 首屏：至少 CHUNK_FIRST_MIN 条；再按「已填充区累计高度覆盖约 1.5 屏」补足
 		var vh = window.innerHeight || 800;
 		var t0 = perfNow();
-		while (
-			prog.ptr < items.length &&
-			(prog.ptr < CHUNK_FIRST_MIN || content.scrollHeight < vh * FIRST_SCREEN_RATIO) &&
-			perfNow() - t0 < FIRST_BUDGET_MS
-		) {
+		while (prog.ptr < items.length && perfNow() - t0 < FIRST_BUDGET_MS) {
 			fillItem(prog.ptr++);
+			// 每 10 条查一次实际高度（避免每条都强制布局）
+			if (prog.ptr >= CHUNK_FIRST_MIN && prog.ptr % 10 === 0) {
+				var lastEl = document.getElementById("item-" + (prog.ptr - 1));
+				if (lastEl && lastEl.getBoundingClientRect().bottom > vh * FIRST_SCREEN_RATIO) break;
+			}
 		}
 		mark("first");
 
