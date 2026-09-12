@@ -503,11 +503,17 @@
 	function onScroll() {
 		var y = window.scrollY;
 		// 向上移 >1px 才算用户主动上滚（避开平滑滚动/锚定修正的抖动）
-		if (y < lastScrollY - 1) followBottom = false;
-		else if (bottomGap() <= 24) followBottom = true; // 滚回底部才重新跟随
+		if (y < lastScrollY - 1) {
+			followBottom = false;
+			lastScrollDir = -1;
+		} else if (y > lastScrollY + 1) {
+			lastScrollDir = 1;
+		} else if (bottomGap() <= 24) {
+			followBottom = true; // 滚回底部才重新跟随
+		}
 		lastScrollY = y;
 		prog.lastUserScrollAt = perfNow();
-		// 用户滚到未填充区域时，尽快把视口补上（节流，不进 idle 队列）
+		// 用户滚到未填充区域时，尽快把「前方」补上（节流，不进 idle 队列）
 		if (!viewportTimer) {
 			viewportTimer = window.setTimeout(function () {
 				viewportTimer = 0;
@@ -557,6 +563,8 @@
 	var ABOVE_IDLE_MS = 1200; // 用户静止多久后才补齐视口上方
 	var VIEWPORT_FILL_BUDGET_MS = 14; // 滚动时即时补视口的单次预算
 	var viewportTimer = 0;
+	var lastScrollDir = 1; // 1 = 下滚，-1 = 上滚；用于决定往哪个方向预取
+	var PREFETCH_ITEMS = 24; // 滚动方向前方额外预取的条数（约 1.2 屏）
 	var prog = {
 		gen: 0, // 代际：renderAll 时自增，旧队列看到不匹配就退出
 		ptr: 0, // 向下推进游标（始终在视口下方）
@@ -614,38 +622,71 @@
 	/**
 	 * 滚动时立即补视口（节流后调用）：优先保证用户看得到的区域有内容。
 	 */
+	/**
+	 * 滚动时立即补填（节流后调用）。
+	 *
+	 * 关键：按**滚动方向预取前方**一个屏。卡片填充会改变高度，只有把填充提在
+	 * “用户还没看到”之前完成，画面才不会跳；否则他滚到哪、哪里就变尺寸，
+	 * 看什么都在动。填上方时由 compensateViewport 把 scrollY 修回去。
+	 */
 	function fillViewportNow() {
 		var r = viewportRange();
+		var a = takeAnchor();
 		var t0 = perfNow();
-		for (var i = r.top; i < r.limit; i++) {
+		var from = r.top;
+		var to = r.limit;
+		if (lastScrollDir < 0) from = Math.max(0, r.top - PREFETCH_ITEMS);
+		else to = Math.min(items.length, r.limit + PREFETCH_ITEMS);
+		for (var i = from; i < to; i++) {
 			if (perfNow() - t0 > VIEWPORT_FILL_BUDGET_MS) break;
 			if (!isFilled(i)) fillItem(i);
 		}
-	}
-
-	/** 视口内第一个子元素（用作补偿基准） */
-	function viewportAnchor() {
-		var content = document.getElementById("content");
-		if (!content || !content.children.length) return null;
-		return content.children[idxAtY(0)] || null;
+		compensateViewport(a.idx, a.top);
 	}
 
 	/**
-	 * 填充«视口上方»的卡片：必须补偿 scrollY。
-	 * 上方卡片高度一变就会把整个视口内容推走，补偿保证用户正在看的内容不动。
-	 * 只在用户静止时调用（用户正在滚时补偿会表现为“滚不动”）。
+	 * 以「视口内第一个卡片」为锚点，在一批填充前后修正 scrollY。
+	 *
+	 * 为什么必须做：卡片填充时高度从估值（179px）变成真实值（长回复可达 3000px），
+	 * 上方内容一变高，视口里的画面就整体往下跳——用户向上滚动时就表现为
+	 * “被拉回”。浏览器的 scroll anchoring 本应做这件事，但它会被程序滚动
+	 * （scrollToBottom）抑制，所以只能自己来。
+	 *
+	 * 放在批次级别（而不是每条）是为了省掉每条一次强制布局。
 	 */
-	function fillItemAbove(idx) {
-		var anchor = viewportAnchor();
-		var topBefore = anchor ? anchor.getBoundingClientRect().top : 0;
-		fillItem(idx);
-		if (!anchor) return;
-		var delta = anchor.getBoundingClientRect().top - topBefore;
-		if (Math.abs(delta) > 0.5) {
-			window.scrollBy(0, delta);
-			lastScrollY = window.scrollY; // 程序滚动，同步基准值
-		}
+	function compensateViewport(anchorIdx, anchorTopBefore) {
+		// 用 id 重新查询：锚点自己可能刚被 replaceWith 换掉
+		var el = document.getElementById("item-" + anchorIdx);
+		if (!el) return;
+		var delta = el.getBoundingClientRect().top - anchorTopBefore;
+		if (Math.abs(delta) <= 0.5) return;
+		window.scrollBy(0, delta);
+		lastScrollY = window.scrollY; // 程序滚动：同步基准，避免 onScroll 误判为用户上滚
+		PERF.compensations = (PERF.compensations || 0) + 1;
+		PERF.compensatedPx = Math.round((PERF.compensatedPx || 0) + delta);
 	}
+
+	/**
+	 * 取当前补偿锚点。
+	 *
+	 * ⚠ 必须选视口内第一个**已填充**的卡片：它自己不会再变尺寸，于是它的位移
+	 * 只可能来自上方内容的填充，用它的位移做补偿才准。
+	 * （若选到还会被填充的骨架，它变高时自己的 top 不变但 bottom 下移，
+	 * 会把下方内容推走而补偿算不出该补多少。）
+	 */
+	function takeAnchor() {
+		var start = idxAtY(0);
+		var end = Math.min(items.length, start + 80);
+		for (var i = start; i < end; i++) {
+			if (!isFilled(i)) continue;
+			var el = document.getElementById("item-" + i);
+			if (el) return { idx: i, top: el.getBoundingClientRect().top };
+		}
+		// 视口内一个已填充的都没有（刚跳进新区域）：退回用视口顶部元素
+		var el2 = document.getElementById("item-" + start);
+		return { idx: start, top: el2 ? el2.getBoundingClientRect().top : 0 };
+	}
+
 
 	/**
 	 * 填充单条（幂等：已填充的会跳过）。把 #item-N 的占位元素换成真实渲染结果。
@@ -695,9 +736,18 @@
 	 */
 	function runChunk(gen) {
 		if (gen !== prog.gen) return; // 已被新的 renderAll 作废
+		// 用户正在滚动时让路：预取（fillViewportNow）优先，避免两者抢主线程
+		// 反而把帧拖长。用户停手 250ms 后后台分片继续。
+		if (perfNow() - prog.lastUserScrollAt < 250) {
+			prog.handle = scheduleIdle(function () {
+				runChunk(gen);
+			});
+			return;
+		}
 		var t0 = perfNow();
 		var n = 0;
 		var r = viewportRange();
+		var anchor = takeAnchor();
 
 		// 1) 视口内 + 下方缓冲
 		for (var i = r.top; i < r.limit && n < CHUNK_SIZE && perfNow() - t0 < CHUNK_BUDGET_MS; i++) {
@@ -707,26 +757,40 @@
 			}
 		}
 
-		// 2) 从视口下方继续向下推进（这些卡片在视口下方，填充它们不会推动视口）
-		if (prog.ptr < r.bottom) prog.ptr = r.bottom;
-		while (prog.ptr < items.length && n < CHUNK_SIZE && perfNow() - t0 < CHUNK_BUDGET_MS) {
-			fillItem(prog.ptr++);
-			n++;
+		// 2) 按滚动方向继续推进：上滚就向上预取（带补偿），下滚就向下填
+		if (lastScrollDir < 0) {
+			if (prog.abovePtr < 0) prog.abovePtr = idxAtY(0);
+			while (prog.abovePtr > 0 && n < CHUNK_SIZE && perfNow() - t0 < CHUNK_BUDGET_MS) {
+				prog.abovePtr--;
+				if (!isFilled(prog.abovePtr)) {
+					fillItem(prog.abovePtr);
+					n++;
+				}
+			}
+		} else {
+			if (prog.ptr < r.bottom) prog.ptr = r.bottom;
+			while (prog.ptr < items.length && n < CHUNK_SIZE && perfNow() - t0 < CHUNK_BUDGET_MS) {
+				fillItem(prog.ptr++);
+				n++;
+			}
 		}
 
-		// 3) 下方满了之后，用户静止时才补齐上方（带补偿）
+		// 3) 下方填完之后，在用户静止时把剩下的（主要是上方）补齐
 		var aboveDone = prog.abovePtr === 0;
 		if (!aboveDone && prog.ptr >= items.length && perfNow() - prog.lastUserScrollAt > ABOVE_IDLE_MS) {
 			if (prog.abovePtr < 0) prog.abovePtr = idxAtY(0);
 			while (prog.abovePtr > 0 && n < CHUNK_SIZE && perfNow() - t0 < CHUNK_BUDGET_MS) {
 				prog.abovePtr--;
 				if (!isFilled(prog.abovePtr)) {
-					fillItemAbove(prog.abovePtr);
+					fillItem(prog.abovePtr);
 					n++;
 				}
 			}
 			aboveDone = prog.abovePtr <= 0;
 		}
+
+		// 批次结束统一修正一次：填充造成的高度变化不该推动用户的画面
+		compensateViewport(anchor.idx, anchor.top);
 
 		var dt = perfNow() - t0;
 		PERF.chunks++;
@@ -837,6 +901,7 @@
 		var el = document.getElementById("item-" + index);
 		if (!el) return;
 		var keepBottom = followBottom;
+		var a = takeAnchor();
 		var wrapper = document.createElement("div");
 		wrapper.innerHTML = htmlFor(item, index);
 		var next = wrapper.firstElementChild;
@@ -845,6 +910,8 @@
 		markExternalLinks(next);
 		renderMath(next);
 		if (tocObserver && item && item.kind === "user") tocObserver.observe(next);
+		// 流式更新同样会让卡片变高：若在视口内/上方，会把画面推走
+		compensateViewport(a.idx, a.top);
 		if (keepBottom) scrollToBottom();
 	}
 
