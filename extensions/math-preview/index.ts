@@ -230,12 +230,18 @@ interface LiveState {
 	flushTimer: ReturnType<typeof setTimeout> | null;
 	/** 最近一次看到的会话上下文（事件/命令里持续更新） */
 	ctx: any | null;
+	/** 最近一次加载的扩展实例（/reload、会话重建后会换成新实例） */
+	pi: any | null;
 	/**
 	 * 服务回调的实现，每个模块实例加载时都会重新安装（见 installImplementations）。
 	 * 这样 /reload 后新实例立刻接管，不再用旧代码生成页面/快照。
 	 */
 	pageHtmlImpl: (() => string | Promise<string>) | null;
 	snapshotImpl: (() => { items: unknown[]; meta: Record<string, unknown> }) | null;
+	/** 页面输入提交实现（会话重建后旧 pi/ctx 会失效，必须走全局实现） */
+	promptImpl: ((text: string) => Promise<void>) | null;
+	/** 服务日志实现（ctx.ui 同样会随会话重建失效） */
+	logImpl: ((message: string) => void) | null;
 }
 
 const STATE_KEY = "__piLivePreviewState";
@@ -252,20 +258,24 @@ function liveState(): LiveState {
 			pendingUpdate: null,
 			flushTimer: null,
 			ctx: null,
+			pi: null,
 			pageHtmlImpl: null,
 			snapshotImpl: null,
+			promptImpl: null,
+			logImpl: null,
 		} satisfies LiveState;
 	}
 	return g[STATE_KEY] as LiveState;
 }
 
 /**
- * 用全局 ctx 安装「当前模块版本」的页面 HTML / 快照实现。
- * 必须在扩展工厂加载时调用：/reload 后新实例立即接管服务回调，
- * 否则服务会一直用启动时那个旧闭包（meta 里永远缺新加的字段）。
+ * 用全局 ctx / 最新扩展实例安装「当前模块版本」的服务回调实现。
+ * 必须在扩展工厂加载时调用：/reload 或会话重建后新实例立即接管，
+ * 否则服务会一直用启动时那个旧闭包（旧 ctx、旧 pi 都已失效）。
  */
-function installImplementations(): void {
+function installImplementations(pi: any): void {
 	const S = liveState();
+	S.pi = pi;
 	S.pageHtmlImpl = () => {
 		const ctx = S.ctx;
 		return buildLiveHtml({ sessionId: sessionShortId(ctx), sessionName: sessionNameOf(ctx), cwd: ctx?.cwd ?? "" });
@@ -285,6 +295,22 @@ function installImplementations(): void {
 				totalItems: S.items.length,
 			},
 		};
+	};
+	// 页面输入：必须用「当前实例」的 pi。
+	// 会话重建（/new、/fork、/resume、/reload）后旧 pi 会失效，直接捕获启动时的 pi
+	// 会让页面发送永远报 “ctx is stale after session replacement or reload”。
+	S.promptImpl = async (text: string) => {
+		const current = S.pi;
+		if (!current) throw new Error("扩展实例尚未就绪，请稍后重试");
+		await current.sendUserMessage(text);
+	};
+	// 服务日志同理：ctx.ui 也会随会话重建失效，取不到就当丢弃，不要影响请求处理
+	S.logImpl = (message: string) => {
+		try {
+			S.ctx?.ui?.notify?.(message, "warn");
+		} catch {
+			/* 旧 ctx 已失效，忽略 */
+		}
 	};
 }
 
@@ -323,8 +349,8 @@ function reloadForContext(ctx: any, reason: string): void {
 
 export default function mathPreview(pi: ExtensionAPI) {
 	const S = liveState();
-	// 模块实例一加载就安装实现：/reload 后新代码立即接管服务回调
-	installImplementations();
+	// 模块实例一加载就安装实现：/reload 或会话重建后新代码、新 pi 立即接管服务回调
+	installImplementations(pi);
 
 	/** 把最新 meta（含上下文用量、花费、goal）推给页面 */
 	function broadcastMeta(ctx: any): void {
@@ -490,9 +516,12 @@ export default function mathPreview(pi: ExtensionAPI) {
 			getSnapshot: () => S.snapshotImpl?.() ?? { items: S.items, meta: {} },
 			isInputEnabled: () => S.inputEnabled,
 			onPrompt: async (text) => {
-				pi.sendUserMessage(text);
+				// 走全局实现：不能用这里的 pi 闭包，否则会话重建后就是失效的旧实例
+				const impl = S.promptImpl;
+				if (!impl) throw new Error("扩展实例尚未就绪，请稍后重试");
+				await impl(text);
 			},
-			onLog: (message) => ctx.ui.notify(message, "warn"),
+			onLog: (message) => S.logImpl?.(message),
 		});
 		S.handle = handle;
 		return handle;
