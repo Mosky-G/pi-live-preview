@@ -67,6 +67,10 @@ html, body {
 	font-family: var(--sans);
 	font-size: 14px;
 	line-height: 1.68;
+	/* 禁用 scroll anchoring：分片/惰性布局会让上方卡片尺寸从估值变成真实值，
+	   anchoring 会不断修正 scrollY，导致“向上翻被拉回”。宁可让内容自己移动，
+	   也不要把用户的滚动位置抢走。 */
+	overflow-anchor: none;
 }
 #shell {
 	display: flex;
@@ -224,13 +228,16 @@ body.side-collapsed #content { padding-left: 58px; }
 	padding: 10px 16px;
 	margin: 14px 0;
 	scroll-margin-top: 16px;
-	/* 长会话（几百个卡片）下，离屏卡片跳过布局与绘制，
-	   显著降低正文宽度变化时的重排开销 */
+	/* 离屏卡片跳过布局与绘制，降低重排开销。
+	   ⚠ 估值必须接近真实高度：它曾用 200px（含盒模型 232px/条），
+	   而实测真实平均只有 155px/条（内容盒约 103px），且长回复可达 3000px。
+	   估值虚高会让元素一进视口就“矮一大截”，叠加 scroll anchoring 就会
+	   不断修正滚动位置（表现为“向上翻被拉回”）。 */
 	content-visibility: auto;
-	contain-intrinsic-size: auto 200px;
+	contain-intrinsic-size: auto 127px;
 }
-/* 分片渲染的占位骨架：保留 .item 的盒模型（宽度/内边距/1px+3px 边框/外边距）
-   与 contain-intrinsic-size，但底色和边框透明——避免分片期间闪现一片"空卡片" */
+/* 分片渲染的占位骨架：保留 .item 的盒模型与 intrinsic 尺寸，只把底色与边框透明，
+   避免分片期间闪现一片“空卡片” */
 .item-skeleton { background: transparent; border-color: transparent; }
 .item > header {
 	display: flex;
