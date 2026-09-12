@@ -40,6 +40,8 @@
 		marks: {},
 		chunks: 0,
 		maxChunkMs: 0,
+		/** 分片渲染已启用（Step 2 起）：测试脚本据此等待 marks.done 而非 marks.total */
+		progressive: true,
 		/** genMs 的内部归因（累计值，单位 ms） */
 		attr: { markedMs: 0, hljsMs: 0, katexMs: 0 },
 	});
@@ -506,14 +508,51 @@
 		});
 	}
 
+	// ---------- 分片渲染 ----------
+	// 目的：先出首屏，剩余条目在后台 idle 分批填充，避免一次构造 970 条把主线程占满。
+	// 骨架已保证总高度 / #item-N 锚点立即存在，所以分片过程不改变文档高度。
+	var CHUNK_FIRST_MIN = 30; // 首屏至少这么多条
+	var FIRST_SCREEN_RATIO = 1.5; // 或覆盖约 1.5 屏
+	var FIRST_BUDGET_MS = 80; // 首屏硬预算
+	var CHUNK_SIZE = 12; // 每批条数上限（实测单条约 1ms）
+	var CHUNK_BUDGET_MS = 10; // 每批时间预算（避免 >50ms 长任务）
+	var IDLE_TIMEOUT_MS = 400; // requestIdleCallback 兜底超时
+	var prog = {
+		gen: 0, // 代际：renderAll 时自增，旧队列看到不匹配就退出
+		ptr: 0, // 下一个待填充下标
+		handle: 0, // rIC / setTimeout handle
+		filled: null, // 已填充标记
+	};
+
+	function scheduleIdle(cb) {
+		if (window.requestIdleCallback) return window.requestIdleCallback(cb, { timeout: IDLE_TIMEOUT_MS });
+		return window.setTimeout(function () {
+			cb({
+				timeRemaining: function () {
+					return CHUNK_BUDGET_MS;
+				},
+			});
+		}, 16);
+	}
+	function cancelIdle(handle) {
+		if (!handle) return;
+		if (window.cancelIdleCallback) window.cancelIdleCallback(handle);
+		else window.clearTimeout(handle);
+	}
+	function isFilled(idx) {
+		return !!(prog.filled && prog.filled[idx]);
+	}
+
 	/**
 	 * 填充单条（幂等：已填充的会跳过）。把 #item-N 的占位元素换成真实渲染结果。
 	 * 内容从 items[idx] 现读 → 写入方先改 items 再调它，不会拿到脏数据。
-	 * 分片渲染、appendItem、updateItem 都会复用这个函数。
+	 * 分片渲染、appendItem、updateItem 都复用这个函数。
 	 */
 	function fillItem(idx) {
+		if (isFilled(idx)) return;
 		var placeholder = document.getElementById("item-" + idx);
 		if (!placeholder) return;
+		if (prog.filled) prog.filled[idx] = true;
 		var box = document.createElement("div");
 		box.innerHTML = htmlFor(items[idx], idx);
 		var el = box.firstElementChild;
@@ -521,34 +560,116 @@
 		placeholder.replaceWith(el);
 		markExternalLinks(el);
 		renderMath(el);
+		// 侧栏高亮观察的是元素本身：元素被替换后要重新注册，否则该条不再触发高亮
+		if (tocObserver && items[idx] && items[idx].kind === "user") tocObserver.observe(el);
+	}
+
+	/** 确保某条已渲染（深链 / 侧栏跳到未填充项时用） */
+	function ensureRendered(idx) {
+		if (!(idx >= 0) || idx >= items.length) return;
+		if (isFilled(idx)) return;
+		fillItem(idx);
+	}
+
+	/** 跳到未填充项时先把它渲染出来，别停在空白骨架上 */
+	function applyHashAnchor() {
+		var m = /^#item-(\d+)$/.exec(location.hash || "");
+		if (!m) return;
+		var idx = parseInt(m[1], 10);
+		if (!(idx >= 0) || idx >= items.length) return;
+		ensureRendered(idx);
+		var el = document.getElementById("item-" + idx);
+		if (el && el.scrollIntoView) el.scrollIntoView();
+	}
+	window.addEventListener("hashchange", applyHashAnchor);
+
+	/** 后台分批填充：条数与时间双重预算，批间让出主线程 */
+	function runChunk(gen) {
+		if (gen !== prog.gen) return; // 已被新的 renderAll 作废
+		var t0 = perfNow();
+		var from = prog.ptr;
+		var n = 0;
+		while (prog.ptr < items.length && n < CHUNK_SIZE && perfNow() - t0 < CHUNK_BUDGET_MS) {
+			fillItem(prog.ptr++);
+			n++;
+		}
+		var dt = perfNow() - t0;
+		PERF.chunks++;
+		if (dt > PERF.maxChunkMs) {
+			PERF.maxChunkMs = Math.round(dt * 10) / 10;
+			// 诊断：哪一段、多少条造成长任务（单条内部无法切分）
+			PERF.slowestChunk = { from: from, to: prog.ptr, items: n, ms: PERF.maxChunkMs };
+		}
+		if (gen !== prog.gen) return;
+		if (prog.ptr < items.length) {
+			prog.handle = scheduleIdle(function () {
+				runChunk(gen);
+			});
+		} else {
+			prog.handle = 0;
+			mark("done");
+		}
 	}
 
 	function renderAll() {
 		var content = document.getElementById("content");
 		if (!content) return;
 		mark("start");
-		// 先铺占位骨架：保证文档总高度、#item-N 锚点、侧栏跳转立即可用，再逐条填充。
-		// 骨架不可见（见 .item-skeleton），只起占位作用。
+		// 作废旧队列：init / reset 连续触发时避免两套队列同时填充、错位
+		prog.gen++;
+		cancelIdle(prog.handle);
+		prog.handle = 0;
+		prog.ptr = 0;
+		prog.filled = Object.create(null);
+		PERF.chunks = 0;
+		PERF.maxChunkMs = 0;
+
+		// 1) 占位骨架：总高度 / #item-N 锚点 / 侧栏跳转立即可用（不可见，见 .item-skeleton）
 		var skeleton = [];
 		for (var i = 0; i < items.length; i++) {
 			skeleton.push('<div class="item item-skeleton" id="item-' + i + '" data-idx="' + i + '"></div>');
 		}
 		content.innerHTML = skeleton.join("\n");
 		mark("skeleton");
-		for (var j = 0; j < items.length; j++) fillItem(j);
-		mark("fill");
+
+		// 2) 首屏：条数下限 / 覆盖约 1.5 屏 / 时间预算，三者取先满足者
+		var vh = window.innerHeight || 800;
+		var t0 = perfNow();
+		while (
+			prog.ptr < items.length &&
+			(prog.ptr < CHUNK_FIRST_MIN || content.scrollHeight < vh * FIRST_SCREEN_RATIO) &&
+			perfNow() - t0 < FIRST_BUDGET_MS
+		) {
+			fillItem(prog.ptr++);
+		}
+		mark("first");
+
+		// 3) 头部 / 侧栏 / 高亮
 		updateHeader();
 		buildSidebar();
 		mark("sidebar");
 		trackActive();
-		mark("total");
 		PERF.items = items.length;
+		mark("total");
+
+		// 4) 剩余条目交给后台 idle（首次也让出，让首屏先绘制）
+		if (prog.ptr < items.length) {
+			prog.handle = scheduleIdle(function () {
+				runChunk(prog.gen);
+			});
+		} else {
+			mark("done");
+		}
+
+		applyHashAnchor();
 	}
 
 	function appendItem(item) {
 		var content = document.getElementById("content");
 		var idx = items.length;
 		items.push(item);
+		// 标记已填充，避免分片队列回头把新条目再填一次
+		if (prog.filled) prog.filled[idx] = true;
 		var keepBottom = isNearBottom();
 		if (content) {
 			var wrapper = document.createElement("div");
@@ -556,7 +677,9 @@
 			var el = wrapper.firstElementChild;
 			if (el) {
 				content.appendChild(el);
+				markExternalLinks(el);
 				renderMath(el);
+				if (tocObserver && item && item.kind === "user") tocObserver.observe(el);
 			}
 		}
 		updateHeader();
@@ -567,6 +690,9 @@
 	function updateItem(index, item) {
 		if (!(index >= 0) || index >= items.length) return;
 		items[index] = item;
+		// 还没填充：只写数据，分片稍后自然会读到最新值
+		// （原来的 `if (!el) return` 在分片场景下会静默丢掉这次更新）
+		if (!isFilled(index)) return;
 		var el = document.getElementById("item-" + index);
 		if (!el) return;
 		var keepBottom = isNearBottom();
@@ -575,7 +701,9 @@
 		var next = wrapper.firstElementChild;
 		if (!next) return;
 		el.replaceWith(next);
+		markExternalLinks(next);
 		renderMath(next);
+		if (tocObserver && item && item.kind === "user") tocObserver.observe(next);
 		if (keepBottom) scrollToBottom();
 	}
 
