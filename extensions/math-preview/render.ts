@@ -107,8 +107,8 @@ export function messageToItem(m: any, time?: unknown): any | null {
 	}
 }
 
-/** entry → 展示项（非 message 类型的 entry 走这里） */
-export function entryToItem(e: any): any | null {
+/** entry → 展示项（非 message 类型的 entry 走这里）；仅供本文件 buildItems 使用 */
+function entryToItem(e: any): any | null {
 	if (!e || typeof e !== "object") return null;
 	if (e.type === "message") return messageToItem(e.message, e.timestamp);
 	if (e.type === "model_change") {

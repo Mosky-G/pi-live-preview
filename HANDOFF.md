@@ -139,11 +139,44 @@ execFile("C:/Program Files/Google/Chrome/Application/chrome.exe",
 
 ## 7. 已知待办 / 未来方向
 
-- **翻译功能已实现后移除**（用户反馈使用中"难以避免的卡顿"）。历史在 git：
+### 已做过的代码整洁化（2026-09 会话末）
+
+- `window.PiPreview` 只保留实时页面真正用到的 6 个接口
+  （`setItems/setMeta/renderAll/appendItem/updateItem/updateHeader`），
+  早先为翻译功能额外暴露的 `getItems/renderMarkdown/renderMath/itemHtml/esc/timeShort/timeFull/
+  buildSidebar/trackActive/setupXxx/writeDiag` 已删除
+- `vendor/ansi-to-html.js` 不再导出未使用的 `ansiLinesToHtml`
+- `render.ts` 的 `entryToItem` 改为文件内私有
+- ⚠️ 写测试别再用已删除的接口：需要读取条目就直接 `buildItems(entries)`
+
+### 已实测的性能基线（**别再重复审计这些，实测证明不是瓶颈**）
+
+在 950 条目的真实会话上测得：
+
+| 指标 | 实测 | 结论 |
+|---|---|---|
+| DOM 节点 / 条目 | 950 / 950 | — |
+| 侧栏链接 | **45**（只渲染 user 条目） | `buildSidebar`/`trackActive` 开销可忽略，**不需要优化** |
+| 首屏 `renderAll` | 约 677ms | 单项最大成本，见下方待办 |
+| 单条 `updateItem` | 约 1~3ms（按均值推算） | 流式期间 120ms 一次，可接受 |
+| `broadcastMeta` 每轮 O(n) 遍历 | <1ms | 无需优化 |
+
+（注：headless 的虚拟时间下 `performance.now()` 不推进，测耗时要改用真实时钟或写临时日志输出）
+
+### 待办：首屏分片渲染（可选，收益明确但有风险）
+
+现状：`renderAll()` 一次性构造全部条目的 HTML 并渲染 KaTeX（950 条 ≈ 677ms）。
+
+思路：先渲染首屏约 50 条 → `requestIdleCallback` 分批追加剩余。预期首屏 < 150ms。
+风险：需处理侧栏 `trackActive` 的观察目标分批注册、深链 `#item-N` 跳转要能触达未渲染项、
+以及自动滚动到底部的行为。建议单独开一轮改动并充分验证。
+
+### 其它
+
+- **翻译功能已实现后移除**（用户反馈使用中“难以避免的卡顿”）。历史在 git：
   `git revert ce49e5d 1cf6c14 73f5602` 可恢复（或 revert 移除提交）
   复盘出的卡顿原因：每 2 秒全量遍历并给 700+ 个块注入按钮；译文完成后整体重渲染（含 KaTeX）。
   若要重做：只在 hover/光标所在块注入按钮、译文用轻量渲染、流式节流放宽
-- 长会话（700+ 条目）下的渲染与重排成本仍可优化
 - 悬浮窗类 UI（曾计划用于翻译）未实现
 
 ## 8. 常用排查口诀

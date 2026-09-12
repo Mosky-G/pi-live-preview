@@ -249,5 +249,5 @@ function ansiLinesToHtml(lines) {
     return lines.map((line) => `<div class="ansi-line">${ansiToHtml(line) || "&nbsp;"}</div>`).join("");
 }
 window.ansiToHtml = ansiToHtml;
-window.ansiLinesToHtml = ansiLinesToHtml;
+// 注：ansiLinesToHtml 是本项目从 pi 移植时一并带来的，实际未使用，故不再导出
 })();

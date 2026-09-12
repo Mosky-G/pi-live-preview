@@ -655,6 +655,9 @@
 		writeDiag();
 	}
 
+	// 只暴露实时页面（viewer-live.js）真正用到的接口。
+	// 早先为翻译功能额外暴露的 getItems/renderMarkdown/renderMath/itemHtml/esc/timeShort/
+	// timeFull/buildSidebar/trackActive/setupXxx/writeDiag 已随翻译移除而删除。
 	window.PiPreview = {
 		setItems: setItems,
 		setMeta: setMeta,
@@ -662,20 +665,6 @@
 		appendItem: appendItem,
 		updateItem: updateItem,
 		updateHeader: updateHeader,
-		buildSidebar: buildSidebar,
-		trackActive: trackActive,
-		renderMarkdown: renderMarkdown,
-		renderMath: renderMath,
-		itemHtml: htmlFor,
-		esc: esc,
-		timeShort: timeShort,
-		timeFull: timeFull,
-		setupSidebarToggle: setupSidebarToggle,
-		setupResizer: setupResizer,
-		writeDiag: writeDiag,
-		getItems: function () {
-			return items;
-		},
 	};
 
 	if (LIVE) {
