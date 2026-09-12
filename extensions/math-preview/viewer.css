@@ -229,6 +229,9 @@ body.side-collapsed #content { padding-left: 58px; }
 	content-visibility: auto;
 	contain-intrinsic-size: auto 200px;
 }
+/* 分片渲染的占位骨架：保留 .item 的盒模型（宽度/内边距/1px+3px 边框/外边距）
+   与 contain-intrinsic-size，但底色和边框透明——避免分片期间闪现一片"空卡片" */
+.item-skeleton { background: transparent; border-color: transparent; }
 .item > header {
 	display: flex;
 	align-items: baseline;

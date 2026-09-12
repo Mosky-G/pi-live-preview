@@ -41,7 +41,7 @@
 		chunks: 0,
 		maxChunkMs: 0,
 		/** genMs 的内部归因（累计值，单位 ms） */
-		attr: { markedMs: 0, hljsMs: 0 },
+		attr: { markedMs: 0, hljsMs: 0, katexMs: 0 },
 	});
 	function perfNow() {
 		return (window.performance && performance.now && performance.now()) || 0;
@@ -279,6 +279,7 @@
 		}
 		root.querySelectorAll("[data-tex]").forEach(function (el) {
 			var display = el.classList.contains("math-display");
+			var t = perfNow();
 			try {
 				katex.render(el.getAttribute("data-tex") || "", el, {
 					displayMode: display,
@@ -289,6 +290,8 @@
 			} catch (e) {
 				el.classList.add("math-error");
 				(window.__mathErrors = window.__mathErrors || []).push(String((e && e.message) || e));
+			} finally {
+				PERF.attr.katexMs += perfNow() - t;
 			}
 		});
 	}
@@ -491,23 +494,49 @@
 	}
 
 	// ---------- 渲染入口（静态与实时共用） ----------
-	function renderAll() {
-		var content = document.getElementById("content");
-		if (!content) return;
-		mark("start");
-		var htmlString = items.map(htmlFor).join("\n");
-		mark("gen");
-		content.innerHTML = htmlString;
-		mark("html");
-		content.querySelectorAll("a[href]").forEach(function (a) {
+
+	/** 给正文里的外链补 target=_blank（# 锚点除外） */
+	function markExternalLinks(root) {
+		root.querySelectorAll("a[href]").forEach(function (a) {
 			var href = a.getAttribute("href") || "";
 			if (href.charAt(0) !== "#") {
 				a.setAttribute("target", "_blank");
 				a.setAttribute("rel", "noreferrer");
 			}
 		});
-		renderMath(content);
-		mark("math");
+	}
+
+	/**
+	 * 填充单条（幂等：已填充的会跳过）。把 #item-N 的占位元素换成真实渲染结果。
+	 * 内容从 items[idx] 现读 → 写入方先改 items 再调它，不会拿到脏数据。
+	 * 分片渲染、appendItem、updateItem 都会复用这个函数。
+	 */
+	function fillItem(idx) {
+		var placeholder = document.getElementById("item-" + idx);
+		if (!placeholder) return;
+		var box = document.createElement("div");
+		box.innerHTML = htmlFor(items[idx], idx);
+		var el = box.firstElementChild;
+		if (!el) return;
+		placeholder.replaceWith(el);
+		markExternalLinks(el);
+		renderMath(el);
+	}
+
+	function renderAll() {
+		var content = document.getElementById("content");
+		if (!content) return;
+		mark("start");
+		// 先铺占位骨架：保证文档总高度、#item-N 锚点、侧栏跳转立即可用，再逐条填充。
+		// 骨架不可见（见 .item-skeleton），只起占位作用。
+		var skeleton = [];
+		for (var i = 0; i < items.length; i++) {
+			skeleton.push('<div class="item item-skeleton" id="item-' + i + '" data-idx="' + i + '"></div>');
+		}
+		content.innerHTML = skeleton.join("\n");
+		mark("skeleton");
+		for (var j = 0; j < items.length; j++) fillItem(j);
+		mark("fill");
 		updateHeader();
 		buildSidebar();
 		mark("sidebar");
