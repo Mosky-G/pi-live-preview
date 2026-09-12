@@ -293,7 +293,18 @@ pre code { background: none; padding: 0; font-size: inherit; color: inherit; }
 .md code { color: var(--md-code); }
 .md strong { font-weight: 700; }
 .md em { font-style: italic; }
-.md table { border-collapse: collapse; margin: 10px 0; font-size: 0.95em; }
+/* 宽表格（单元格里有长 inline code 这类不可断词内容）不应把正文顶出视口。
+   display:block + max-width:100% + overflow-x:auto：表格自己横向滚动，
+   而不是把 min-content 宽度传给 #pane 撑出整页横向滚动条。 */
+.md table {
+	border-collapse: collapse;
+	margin: 10px 0;
+	font-size: 0.95em;
+	display: block;
+	max-width: 100%;
+	overflow-x: auto;
+	overflow-y: hidden;
+}
 .md th, .md td { border: 1px solid #ffffff; padding: 5px 10px; }
 .md th { background: #222a33; font-weight: 600; color: var(--md-heading); }
 .md blockquote {
