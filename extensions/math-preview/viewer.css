@@ -415,56 +415,6 @@ body.live-resizing { user-select: none; cursor: row-resize; }
 .live-status { font-size: 12px; color: var(--dim); white-space: nowrap; padding-bottom: 10px; }
 .live-status.err { color: var(--accent-error); }
 
-/* ---------- 翻译（独立功能，仅在开关打开时注入 viewer-translate.js） ---------- */
-.pi-translatable { position: relative; }
-.pi-translate-btn {
-	float: right;
-	margin: 0 0 4px 8px;
-	padding: 0 6px;
-	height: 18px;
-	line-height: 17px;
-	font-size: 11px;
-	color: #9fb3c8;
-	background: #1f2833;
-	border: 1px solid #35424f;
-	border-radius: 4px;
-	cursor: pointer;
-}
-.pi-translate-btn:hover { color: #e8eef5; background: #2a3644; border-color: #4d5c6b; }
-.pi-translate-btn.done { color: #8fd98f; border-color: #3d5a3d; }
-#pi-translate-overlay {
-	position: fixed;
-	right: 18px;
-	bottom: 18px;
-	width: 440px;
-	max-width: calc(100vw - 36px);
-	max-height: 60vh;
-	display: flex;
-	flex-direction: column;
-	z-index: 100;
-	background: #1b222b;
-	border: 1px solid #3a4756;
-	border-radius: 10px;
-	box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
-	overflow: hidden;
-}
-#pi-translate-overlay[hidden] { display: none; }
-.pi-tr-head { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-bottom: 1px solid #2b333d; font-size: 12px; }
-.pi-tr-title { font-weight: 600; }
-.pi-tr-status { flex: 1; color: var(--dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pi-tr-copy, .pi-tr-close {
-	background: transparent;
-	color: var(--dim);
-	border: 1px solid transparent;
-	border-radius: 4px;
-	cursor: pointer;
-	font-size: 12px;
-	padding: 1px 6px;
-}
-.pi-tr-copy:hover, .pi-tr-close:hover { color: var(--fg); border-color: #3a4756; }
-.pi-tr-body { padding: 10px 12px; overflow: auto; font-size: 13.5px; line-height: 1.7; }
-.pi-tr-error { color: var(--accent-error); }
-
 @media (max-width: 860px) {
 	#shell { flex-direction: column; }
 	#sidebar { width: auto; align-self: stretch; }

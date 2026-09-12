@@ -81,12 +81,6 @@
 			case "info":
 				setStatus(msg.text || "");
 				break;
-			default:
-				// 交给可选插件（翻译等）处理，未注入时忽略
-				if (window.PiTranslate && typeof window.PiTranslate.handleEvent === "function") {
-					window.PiTranslate.handleEvent(msg);
-				}
-				break;
 		}
 	}
 

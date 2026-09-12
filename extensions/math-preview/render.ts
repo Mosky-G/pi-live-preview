@@ -169,9 +169,8 @@ const COMMON_SCRIPTS = `<script src="assets/marked.min.js"></script>
 <script src="assets/ansi-to-html.js"></script>`;
 
 /** 生成静态页面（自包含，数据内嵌） */
-export async function buildHtml(items: any[], meta: PreviewMeta, opts?: { translate?: boolean }): Promise<string> {
+export async function buildHtml(items: any[], meta: PreviewMeta): Promise<string> {
 	const { viewerJs, viewerCss } = await readViewerAssets();
-	const translateJs = opts?.translate ? await readTranslateJs() : "";
 	const payload = JSON.stringify({ meta, items }).replace(/</g, "\\u003c");
 	// 标签页名：有会话名用会话名，否则叫「新的对话」；加后缀区分静态快照
 	const title = `${meta.sessionName || "新的对话"} · 快照`;
@@ -205,17 +204,15 @@ ${COMMON_SCRIPTS}
 <script>
 ${safeScript(viewerJs)}
 </script>
-${translateJs ? `<script>\n${safeScript(translateJs)}\n</script>` : ""}
 </body>
 </html>
 `;
 }
 
 /** 生成实时页面（数据由 SSE 推送，带输入通道） */
-export async function buildLiveHtml(meta: Partial<PreviewMeta>, opts?: { translate?: boolean }): Promise<string> {
+export async function buildLiveHtml(meta: Partial<PreviewMeta>): Promise<string> {
 	const { viewerJs, viewerCss } = await readViewerAssets();
 	const liveJs = await readFile(join(EXT_DIR, "viewer-live.js"), "utf8");
-	const translateJs = opts?.translate ? await readTranslateJs() : "";
 	const title = meta.sessionName || "新的对话";
 	return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -258,17 +255,7 @@ ${safeScript(viewerJs)}
 <script>
 ${safeScript(liveJs)}
 </script>
-${translateJs ? `<script>\n${safeScript(translateJs)}\n</script>` : ""}
 </body>
 </html>
 `;
-}
-
-/** 翻译前端脚本（独立文件，仅开关打开时注入） */
-async function readTranslateJs(): Promise<string> {
-	try {
-		return await readFile(join(EXT_DIR, "viewer-translate.js"), "utf8");
-	} catch {
-		return "";
-	}
 }
